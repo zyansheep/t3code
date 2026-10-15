@@ -704,3 +704,31 @@ it("links complete absolute paths in prose and skips shortened ones", () => {
   expect(links(`[notes](${path}) and \`${path}\``)).toEqual([path]);
   expect(links(`\`\`\`\n${path}\n\`\`\``)).toEqual([]);
 });
+
+it("keeps abbreviation expansions for the renderer without native title tooltips", () => {
+  const processor = unified()
+    .use(remarkParse)
+    .use(CHAT_MARKDOWN_REMARK_PLUGINS)
+    .use(remarkRehype, { allowDangerousHtml: true })
+    .use(CHAT_MARKDOWN_REHYPE_PLUGINS);
+  const tree = processor.runSync(
+    processor.parse(
+      'Set a <abbr title="Content Security Policy">CSP</abbr> on <span title="Native">the page</span>.',
+    ),
+  );
+  expect(tree.children[0]).toMatchObject({
+    tagName: "p",
+    children: [
+      { type: "text", value: "Set a " },
+      {
+        tagName: "abbr",
+        properties: { dataMarkdownTitle: "Content Security Policy" },
+        children: [{ type: "text", value: "CSP" }],
+      },
+      { type: "text", value: " on " },
+      { tagName: "span", properties: {}, children: [{ type: "text", value: "the page" }] },
+      { type: "text", value: "." },
+    ],
+  });
+  expect(JSON.stringify(tree)).not.toContain('"title"');
+});

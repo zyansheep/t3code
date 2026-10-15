@@ -123,6 +123,7 @@ import {
   showExternalLinkContextMenu,
 } from "./chat/externalLinkContextMenu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { recordVisitForThread } from "../browserHistoryStore";
@@ -1008,6 +1009,12 @@ const CITATION_ENDS_BLOCK = new RegExp(
   String.raw`^[ \t]*(?:$|\n[ \t]*(?:\n|$)|\n[ \t>]*${LIST_MARKER})`,
 );
 
+// One popover per message shows every abbreviation's expansion; each <abbr> is only a trigger.
+const MarkdownAbbreviationContext = React.createContext<ReturnType<
+  typeof PopoverCreateHandle<string>
+> | null>(null);
+const ABBREVIATION_HOVER_DELAY_MS = 300;
+
 function markdownHeadingRenderer(level: 1 | 2 | 3 | 4 | 5 | 6) {
   const Tag = `h${level}` as const;
   return function MarkdownHeading({
@@ -1052,6 +1059,31 @@ const CHAT_MARKDOWN_COMPONENTS = {
       <p {...props}>
         {renderSkillInlineMarkdownChildren(children, skills, threadRef, environmentId)}
       </p>
+    );
+  },
+  abbr: function MarkdownAbbreviation({ node, children, ...props }) {
+    const popover = use(MarkdownAbbreviationContext);
+    const expansion = node?.properties?.dataMarkdownTitle;
+    if (!popover || typeof expansion !== "string" || expansion.trim() === "") {
+      return <abbr {...props}>{children}</abbr>;
+    }
+    // Hover previews the expansion; a click or tap keeps it open, so it also works on touch.
+    return (
+      <PopoverTrigger
+        handle={popover}
+        payload={expansion}
+        openOnHover
+        delay={ABBREVIATION_HOVER_DELAY_MS}
+        nativeButton={false}
+        render={
+          <abbr
+            {...props}
+            className="cursor-help underline decoration-dotted decoration-muted-foreground/60 underline-offset-2"
+          />
+        }
+      >
+        {children}
+      </PopoverTrigger>
     );
   },
   blockquote: function MarkdownBlockquote({ node: _node, children, ...props }) {
@@ -1858,6 +1890,9 @@ function ChatMarkdown({
         extraRemarkPlugins,
       );
   const blocks = streamingBlocks ?? [text];
+  // Only messages with raw <abbr> markup mount the shared expansion popover.
+  const hasAbbreviations = parseRawHtml && /<abbr\b/i.test(text);
+  const [abbreviationPopover] = useState(() => PopoverCreateHandle<string>());
 
   return (
     <Root
@@ -1872,6 +1907,7 @@ function ChatMarkdown({
       onCopy={handleCopy}
     >
       <ChatMarkdownRendererContext value={componentState}>
+        <MarkdownAbbreviationContext value={hasAbbreviations ? abbreviationPopover : null}>
         {blocks.map((source, index) => (
           <MarkdownSource
             // oxlint-disable-next-line react/no-array-index-key -- streamed blocks only change at the end
@@ -1888,7 +1924,17 @@ function ChatMarkdown({
             cache={!props.isStreaming || index < blocks.length - 1}
           />
         ))}
+        </MarkdownAbbreviationContext>
       </ChatMarkdownRendererContext>
+      {hasAbbreviations ? (
+        <Popover handle={abbreviationPopover}>
+          {({ payload }) => (
+            <PopoverPopup tooltipStyle side="top" initialFocus={false}>
+              {payload}
+            </PopoverPopup>
+          )}
+        </Popover>
+      ) : null}
       {localMediaPreview ? (
         <ExpandedImageDialog preview={localMediaPreview} onClose={closeLocalMediaPreview} />
       ) : null}
