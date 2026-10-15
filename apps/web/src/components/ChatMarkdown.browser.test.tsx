@@ -372,3 +372,19 @@ describe("ChatMarkdown Windows file links", () => {
     }
   });
 });
+
+describe("ChatMarkdown abbreviations", () => {
+  it("shows an abbreviation's expansion in a popover on click, not a native tooltip", async () => {
+    setup();
+    await using screen = await renderText(
+      'Set a <abbr title="Content Security Policy">CSP</abbr> header.',
+    );
+    const abbreviation = screen.container.querySelector("abbr")!;
+    expect(abbreviation.textContent).toBe("CSP");
+    expect(abbreviation.hasAttribute("title")).toBe(false);
+    expect(document.body.textContent).not.toContain("Content Security Policy");
+
+    await userEvent.click(abbreviation);
+    await expect.element(page.getByText("Content Security Policy")).toBeVisible();
+  });
+});
