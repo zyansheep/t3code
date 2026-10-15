@@ -182,6 +182,21 @@ function rehypePreserveImageSourceMeta() {
   };
 }
 
+/** Carries an abbreviation's expansion past the sanitizer, which drops native `title` tooltips. */
+function rehypePreserveAbbreviationTitles() {
+  return (tree: MarkdownImageHastNode) => {
+    const visit = (node: MarkdownImageHastNode) => {
+      const title = node.properties?.title;
+      if (node.type === "element" && node.tagName === "abbr" && typeof title === "string") {
+        node.properties = { ...node.properties, dataMarkdownTitle: title };
+      }
+      node.children?.forEach(visit);
+    };
+
+    visit(tree);
+  };
+}
+
 const IMAGE_SRC_PROTOCOLS = [...(defaultSchema.protocols?.src ?? []), "file", "t3-context"];
 
 // The sanitizer compares schemes case-sensitively, so lowercase accepted editor links first.
@@ -206,6 +221,7 @@ function rehypeNormalizeLocalEditorLinks() {
 
 const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "abbr"],
   attributes: {
     ...defaultSchema.attributes,
     "*": (defaultSchema.attributes?.["*"] ?? []).filter((attribute) => attribute !== "title"),
@@ -218,6 +234,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
     div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
     a: [...(defaultSchema.attributes?.a ?? []), "dataPullRequestAutolink"],
+    abbr: ["dataMarkdownTitle"],
     img: [
       ...(defaultSchema.attributes?.img ?? []),
       "dataDarkSrc",
@@ -356,6 +373,7 @@ export const CHAT_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   rehypeRawWhenPresent,
   rehypePreserveImageSourceMeta,
   rehypeNormalizeLocalEditorLinks,
+  rehypePreserveAbbreviationTitles,
   [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],
 ];
 
