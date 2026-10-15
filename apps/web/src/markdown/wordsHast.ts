@@ -16,6 +16,7 @@ import { GITHUB_ALERT_MARKER } from "@t3tools/shared/markdownGithubAlerts";
 import { absoluteFilePathMatches } from "@t3tools/shared/markdownLinks";
 import {
   rehypeNormalizeLocalFileLinks,
+  rehypePreserveAbbreviationTitles,
   rehypePreserveImageSourceMeta,
   sanitizeChatHast,
 } from "@t3tools/shared/markdownHast";
@@ -923,6 +924,7 @@ const addHeadingIds = rehypeHeadingIds();
 const addTextDirection = rehypeTextDirection();
 const preserveImageSourceMeta = rehypePreserveImageSourceMeta();
 const normalizeLocalFileLinks = rehypeNormalizeLocalFileLinks();
+const preserveAbbreviationTitles = rehypePreserveAbbreviationTitles();
 const groupChipPunctuation = rehypeChipPunctuation();
 
 const INSIGHT_OPENING = /^( {0,3})(`?)★ Insight[ \t]+─{3,}\2[ \t]*$/u;
@@ -1202,6 +1204,7 @@ export function wordsHast(text: string, options: WordsHastOptions): Root {
   transform(tree, walk, false, false);
   preserveImageSourceMeta(tree as never);
   normalizeLocalFileLinks(tree as never);
+  preserveAbbreviationTitles(tree as never);
   const hast = sanitizeChatHast(tree);
   if (walk.math.size > 0) restoreMath(hast, walk.math);
   if (insights) restorePositions(hast, insights.toOriginal);

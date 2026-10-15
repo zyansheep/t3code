@@ -31,6 +31,7 @@ import {
   CHAT_MARKDOWN_SANITIZE_SCHEMA,
   chatMarkdownImageSource,
   rehypeNormalizeLocalFileLinks,
+  rehypePreserveAbbreviationTitles,
   rehypePreserveImageSourceMeta,
   type ChatMarkdownImageProperties,
 } from "./markdownHast.ts";
@@ -211,6 +212,7 @@ export const CHAT_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   rehypeRawWhenPresent,
   rehypePreserveImageSourceMeta,
   rehypeNormalizeLocalFileLinks,
+  rehypePreserveAbbreviationTitles,
   [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],
 ];
 
