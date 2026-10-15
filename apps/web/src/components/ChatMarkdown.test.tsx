@@ -1377,3 +1377,35 @@ describe("ChatMarkdown in-page links", () => {
     },
   );
 });
+
+describe("ChatMarkdown abbreviations", () => {
+  it("shows an abbreviation's expansion in a popover on click, not a native tooltip", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => {
+        root.render(
+          <ChatMarkdown
+            cwd={undefined}
+            text={'Set a <abbr title="Content Security Policy">CSP</abbr> header.'}
+          />,
+        );
+      });
+      const abbreviation = container.querySelector("abbr");
+      expect(abbreviation?.textContent).toBe("CSP");
+      expect(abbreviation?.hasAttribute("title")).toBe(false);
+      expect(document.body.textContent).not.toContain("Content Security Policy");
+
+      await act(async () => {
+        abbreviation?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+      expect(document.body.textContent).toContain("Content Security Policy");
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+});
