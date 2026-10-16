@@ -76,6 +76,7 @@ import {
   ClientActivityReportInput,
   HostPowerSnapshot,
 } from "./background.ts";
+import { AnnotationInteractionsReportInput } from "./annotationInteractions.ts";
 import {
   FilesystemGetMetadataInput,
   FilesystemGetMetadataResult,
@@ -506,6 +507,7 @@ export const WS_METHODS = {
   serverCheckOtlpEndpoint: "server.checkOtlpEndpoint",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
+  serverReportAnnotationInteractions: "server.reportAnnotationInteractions",
   serverReportHostPowerState: "server.reportHostPowerState",
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
@@ -938,6 +940,14 @@ const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientAc
   payload: ClientActivityReportInput,
   error: EnvironmentAuthorizationError,
 });
+
+const WsServerReportAnnotationInteractionsRpc = Rpc.make(
+  WS_METHODS.serverReportAnnotationInteractions,
+  {
+    payload: AnnotationInteractionsReportInput,
+    error: EnvironmentAuthorizationError,
+  },
+);
 
 const WsServerReportHostPowerStateRpc = Rpc.make(WS_METHODS.serverReportHostPowerState, {
   payload: HostPowerSnapshot,
@@ -1937,6 +1947,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,
+  WsServerReportAnnotationInteractionsRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
   WsCloudGetRelayClientStatusRpc,

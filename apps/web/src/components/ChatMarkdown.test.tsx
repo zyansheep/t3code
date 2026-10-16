@@ -48,7 +48,10 @@ vi.mock("./ui/tooltip", async () => {
   };
 });
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
-vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+const { atomCommand } = vi.hoisted(() => ({
+  atomCommand: vi.fn(async () => ({ _tag: "Success" })),
+}));
+vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => atomCommand }));
 vi.mock("../state/session", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/session")>();
   const { AuthStandardClientScopes } = await import("@t3tools/contracts");
@@ -1381,6 +1384,8 @@ describe("ChatMarkdown in-page links", () => {
 describe("ChatMarkdown abbreviations", () => {
   it("shows an abbreviation's expansion in a popover on click, not a native tooltip", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    atomCommand.mockClear();
+    const environmentId = EnvironmentId.make("environment-abbr");
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
@@ -1389,7 +1394,10 @@ describe("ChatMarkdown abbreviations", () => {
         root.render(
           <ChatMarkdown
             cwd={undefined}
-            text={'Set a <abbr title="Content Security Policy">CSP</abbr> header.'}
+            environmentId={environmentId}
+            text={
+              'Set a <abbr title="Content Security Policy">CSP</abbr> and <abbr title="HTTP Strict Transport Security">HSTS</abbr> header.'
+            }
           />,
         );
       });
@@ -1402,6 +1410,27 @@ describe("ChatMarkdown abbreviations", () => {
         abbreviation?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
       });
       expect(document.body.textContent).toContain("Content Security Policy");
+
+      // Closing reports the pinned abbreviation with every abbreviation of the message, by text and position.
+      await act(async () => {
+        abbreviation?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+      expect(atomCommand).toHaveBeenCalledTimes(1);
+      const [report] = atomCommand.mock.calls[0] as unknown as [
+        { environmentId: string; input: { items: Array<Record<string, unknown>> } },
+      ];
+      expect(report.environmentId).toBe(environmentId);
+      expect(report.input.items).toHaveLength(1);
+      expect(report.input.items[0]).toMatchObject({
+        kind: "pin",
+        word: "CSP",
+        position: 0,
+        annotations: [
+          ["CSP", 0, 0],
+          ["HSTS", 0, 0],
+        ],
+      });
+      expect(JSON.stringify(report)).not.toContain("header");
     } finally {
       await act(async () => root.unmount());
       container.remove();
