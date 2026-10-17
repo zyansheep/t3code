@@ -16,9 +16,13 @@ import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
+import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
 
 vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
+const atomValues = vi.hoisted(() => new Map<unknown, unknown>());
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: (atom: unknown) => atomValues.get(atom) ?? null,
+}));
 vi.mock("./chat/MermaidDiagram", () => ({
   // Real Mermaid needs layout APIs jsdom lacks; a rendered diagram is an SVG.
   MermaidDiagram: () => <svg aria-label="Diagram" />,
@@ -1386,6 +1390,9 @@ describe("ChatMarkdown abbreviations", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     atomCommand.mockClear();
     const environmentId = EnvironmentId.make("environment-abbr");
+    // The desktop app's own server, which forwards reports, rather than the possibly stock server hosting the chat.
+    const localEnvironmentId = EnvironmentId.make("environment-local");
+    atomValues.set(primaryEnvironmentIdAtom, localEnvironmentId);
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
@@ -1420,7 +1427,7 @@ describe("ChatMarkdown abbreviations", () => {
       const [report] = atomCommand.mock.calls[0] as unknown as [
         { environmentId: string; input: { items: Array<Record<string, unknown>> } },
       ];
-      expect(report.environmentId).toBe(environmentId);
+      expect(report.environmentId).toBe(localEnvironmentId);
       expect(report.input.items).toHaveLength(1);
       expect(report.input.items[0]).toMatchObject({
         kind: "pin",
@@ -1436,6 +1443,7 @@ describe("ChatMarkdown abbreviations", () => {
       await act(async () => root.unmount());
       container.remove();
       vi.unstubAllGlobals();
+      atomValues.clear();
     }
   });
 });
