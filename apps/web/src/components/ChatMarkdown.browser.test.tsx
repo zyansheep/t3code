@@ -1,6 +1,6 @@
 import { MISSING_FILE_ACCESS_MESSAGE } from "@t3tools/client-runtime/state/assets";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { AsyncResult } from "effect/reactivity";
+import { type Atom, AsyncResult } from "effect/reactivity";
 import { type ReactElement } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { commands, page, userEvent } from "vite-plus/test/browser";
@@ -125,6 +125,11 @@ vi.mock(import("../state/use-atom-command"), async (original) => {
         : actual.useAtomCommand(command as never, options as never)) as never,
   };
 });
+// The client's own server, which forwards annotation reports, rather than the one hosting the chat.
+vi.mock(import("../state/primaryEnvironment"), async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { primaryEnvironmentIdAtom: Atom.make<string | null>(null) as never };
+});
 vi.mock(import("../remoteOpen"), async (original) => ({
   ...(await original()),
   useRemoteOpenResolution: () => ({ state: { mode: "local-exec" }, isResolved: true }) as never,
@@ -176,6 +181,15 @@ import {
   chatMarkdownClipboardPayload,
   serializeRenderedMarkdownFragment,
 } from "../markdown-clipboard";
+import { AppAtomRegistryProvider, appAtomRegistry } from "../rpc/atomRegistry";
+import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
+
+// Writable under the mock above.
+const setPrimaryEnvironment = (environmentId: EnvironmentId | null) =>
+  appAtomRegistry.set(
+    primaryEnvironmentIdAtom as unknown as Atom.Writable<EnvironmentId | null>,
+    environmentId,
+  );
 import { AudioPreview } from "./files/AudioPreview";
 
 it("keeps compact audio playback loaded across signed URL renewals", async () => {
@@ -206,6 +220,7 @@ function setup() {
   settingsOverrides.mathRenderingEnabled = false;
   nativeFileDrag.enabled = false;
   annotationReport.mockClear();
+  setPrimaryEnvironment(null);
   renderDiagram.mockReset();
   threadWorktrees.clear();
   workspaceSearch.mockReset().mockResolvedValue(AsyncResult.success({ entries: [] }));
@@ -1299,10 +1314,19 @@ describe("ChatMarkdown abbreviations", () => {
   it("reports a pinned abbreviation with every abbreviation of its message when it closes", async () => {
     setup();
     const environmentId = EnvironmentId.make("environment-abbr");
-    await using screen = await renderText(
-      'Set a <abbr title="Content Security Policy">CSP</abbr> and <abbr title="HTTP Strict Transport Security">HSTS</abbr> header.',
-      // Chat messages name their environment only through the thread.
-      { threadRef: { environmentId, threadId: ThreadId.make("thread-abbr") } },
+    const localEnvironmentId = EnvironmentId.make("environment-local");
+    setPrimaryEnvironment(localEnvironmentId);
+    await using screen = await render(
+      <AppAtomRegistryProvider>
+        <ChatMarkdown
+          cwd="/tmp/project"
+          text={
+            'Set a <abbr title="Content Security Policy">CSP</abbr> and <abbr title="HTTP Strict Transport Security">HSTS</abbr> header.'
+          }
+          // Chat messages name their environment only through the thread.
+          threadRef={{ environmentId, threadId: ThreadId.make("thread-abbr") }}
+        />
+      </AppAtomRegistryProvider>,
     );
     const abbreviation = screen.container.querySelector("abbr")!;
     await userEvent.click(abbreviation);
@@ -1313,7 +1337,7 @@ describe("ChatMarkdown abbreviations", () => {
     const [report] = annotationReport.mock.calls[0] as unknown as [
       { environmentId: string; input: { items: Array<Record<string, unknown>> } },
     ];
-    expect(report.environmentId).toBe(environmentId);
+    expect(report.environmentId).toBe(localEnvironmentId);
     expect(report.input.items).toHaveLength(1);
     expect(report.input.items[0]).toMatchObject({
       kind: "pin",
