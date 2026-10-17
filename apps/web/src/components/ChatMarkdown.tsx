@@ -168,6 +168,7 @@ import {
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
 import { reportAnnotationInteractions } from "../state/annotationInteractions";
+import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { describeAnnotations, registerReadingMessage } from "../lib/annotationReading";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { projectEnvironment } from "../state/projects";
@@ -1737,8 +1738,14 @@ function ChatMarkdown({
     reportDefect: false,
   });
   const openAbbreviation = useRef<OpenAbbreviation | null>(null);
-  // Chat messages name their environment through threadRef, other markdown through environmentId.
-  const environmentId = componentState.environmentId;
+  // Markdown that belongs to an environment (chat messages name theirs through threadRef) reports to this client's own
+  // server when it has one: the desktop app's local server forwards to the collector, while the server hosting the chat
+  // may be a stock build without this RPC.
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const environmentId =
+    componentState.environmentId === null
+      ? null
+      : (primaryEnvironmentId ?? componentState.environmentId);
   // Clicks, selections, mouse paths and paragraph stays on screen in a finished message with annotations.
   const reportReading = useEffectEvent((items: ReadonlyArray<AnnotationReading>) => {
     if (environmentId) void reportAnnotations({ environmentId, input: { items: [...items] } });
