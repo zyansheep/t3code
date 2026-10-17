@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   IDLE_MS,
+  PAUSE_MS,
   account,
   flush,
   newStay,
@@ -191,5 +192,27 @@ describe("reading signals in a message", () => {
       away: 0,
       wall: IDLE_MS + 10_000,
     });
+  });
+
+  it("ends a stay once nothing was read for a while, and starts a new one when the reader is back", () => {
+    using reading = setup();
+    const { container } = reading;
+    const observer = FakeIntersectionObserver.last!;
+    const first = container.querySelector("#first")!;
+    const focus = vi.spyOn(document, "hasFocus");
+    document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    observer.show(first, true);
+    vi.advanceTimersByTime(5_000);
+    focus.mockReturnValue(false); // another window, with this one still showing
+    vi.advanceTimersByTime(PAUSE_MS + 30_000);
+    focus.mockReturnValue(true);
+    document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    vi.advanceTimersByTime(3_000);
+    observer.show(first, false);
+    const items = sent();
+    expect(items.map((item) => item.kind === "visible" && item.ms)).toEqual([5_000, 3_000]);
+    const [left] = items;
+    expect(left).toMatchObject({ kind: "visible", idle: 0 });
+    expect(left?.kind === "visible" && left.wall).toBeLessThan(5_000 + PAUSE_MS + 2_000); // not the whole time away
   });
 });
