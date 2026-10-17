@@ -4,6 +4,7 @@ import type { AnnotationReading } from "@t3tools/contracts";
  * Where a reader was in chat messages with `<abbr>` annotations: clicks, selections, mouse paths and paragraph stays on
  * screen, as positions, times and counts, never text. A stay's `ms` counts only time a reader could have been reading
  * (window visible and focused, no media playing, input within `IDLE_MS`); the rest goes to `away`, `media` or `idle`.
+ * A stay with no reading for `PAUSE_MS` ends there, and the next input starts a new one.
  */
 
 const ANNOTATION_SELECTOR = "abbr[data-markdown-abbreviation]";
@@ -13,6 +14,7 @@ export const IDLE_MS = 30_000;
 const GAP_MS = 3_000; // a longer gap between ticks means throttled timers or a sleeping machine
 const STAY_MIN_MS = 1_000; // a shorter stay was a scroll past
 const STAY_MAX_MS = 600_000; // a longer one is sent in parts
+export const PAUSE_MS = 60_000;
 const TRACE_STEP_MS = 100;
 const TRACE_STEP_PX = 4;
 const TRACE_MAX_POINTS = 200;
@@ -38,6 +40,7 @@ export interface ReadingMessage {
 export interface Stay {
   at: number;
   last: number;
+  lastRead: number;
   wall: number;
   ms: number;
   away: number;
@@ -85,12 +88,14 @@ export function account(stay: Stay, now: number, state: ReadingState): Stay {
   const bucket =
     state.away || dt > GAP_MS ? "away" : state.media ? "media" : state.idle ? "idle" : "ms";
   stay[bucket] += dt;
+  if (bucket === "ms") stay.lastRead = now;
   return stay;
 }
 
 export const newStay = (now: number): Stay => ({
   at: now,
   last: now,
+  lastRead: now,
   wall: 0,
   ms: 0,
   away: 0,
@@ -261,6 +266,7 @@ function endTrace() {
 
 function onPointer(event: PointerEvent | WheelEvent) {
   lastInput = Date.now();
+  resumeStays();
   if ("pointerType" in event && event.pointerType === "touch") return;
   const message =
     trace && trace.message.container.contains(event.target as Node)
@@ -331,14 +337,22 @@ function tick() {
   const now = Date.now();
   const state = stateNow(now);
   const full: Element[] = [];
+  const left: Element[] = [];
   for (const [block, stay] of stays) {
     account(stay, now, state);
     if (stay.wall >= STAY_MAX_MS) full.push(block);
+    else if (now - stay.lastRead > PAUSE_MS) left.push(block);
   }
   for (const block of full) {
     endStay(block);
     startStay(block);
   }
+  for (const block of left) endStay(block);
+}
+
+// After a pause ended them, the paragraphs still on screen get new stays once the reader is back.
+function resumeStays() {
+  if (stays.size < inView.size) for (const block of inView) startStay(block);
 }
 
 // Half of a paragraph on screen, or for a taller one, enough of it to fill 40% of the window.
@@ -377,6 +391,7 @@ function onMedia(event: Event) {
 
 function noteInput() {
   lastInput = Date.now();
+  resumeStays();
 }
 
 function listen() {
