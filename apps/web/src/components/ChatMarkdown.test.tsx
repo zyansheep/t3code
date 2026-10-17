@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { EnvironmentId, type AuthEnvironmentScope } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, type AuthEnvironmentScope } from "@t3tools/contracts";
 import { createRoot } from "react-dom/client";
 import { useThreadFindHighlights } from "./chat/threadFindHighlights";
 import { searchableMessageSegments } from "@t3tools/shared/threadFindText";
@@ -1394,7 +1394,8 @@ describe("ChatMarkdown abbreviations", () => {
         root.render(
           <ChatMarkdown
             cwd={undefined}
-            environmentId={environmentId}
+            // Chat messages name their environment only through the thread.
+            threadRef={{ environmentId, threadId: ThreadId.make("thread-abbr") }}
             text={
               'Set a <abbr title="Content Security Policy">CSP</abbr> and <abbr title="HTTP Strict Transport Security">HSTS</abbr> header.'
             }

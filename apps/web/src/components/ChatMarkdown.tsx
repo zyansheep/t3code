@@ -3542,7 +3542,8 @@ function ChatMarkdown({
     reportDefect: false,
   });
   const openAbbreviation = useRef<OpenAbbreviation | null>(null);
-  const environmentId = props.environmentId;
+  // Chat messages name their environment through threadRef, other markdown through environmentId.
+  const environmentId = componentState.environmentId;
   // Clicks, selections, mouse paths and paragraph stays on screen in a finished message with annotations.
   const reportReading = useEffectEvent((items: ReadonlyArray<AnnotationReading>) => {
     if (environmentId) void reportAnnotations({ environmentId, input: { items: [...items] } });
