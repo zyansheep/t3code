@@ -408,7 +408,8 @@ describe("ChatMarkdown abbreviations", () => {
     const environmentId = EnvironmentId.make("environment-abbr");
     await using screen = await renderText(
       'Set a <abbr title="Content Security Policy">CSP</abbr> and <abbr title="HTTP Strict Transport Security">HSTS</abbr> header.',
-      { environmentId },
+      // Chat messages name their environment only through the thread.
+      { threadRef: { environmentId, threadId: ThreadId.make("thread-abbr") } },
     );
     const abbreviation = screen.container.querySelector("abbr")!;
     await userEvent.click(abbreviation);
