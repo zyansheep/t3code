@@ -95,3 +95,25 @@ export const AnnotationInteractionsReportInput = Schema.Struct({
   items: Schema.Array(AnnotationInteraction).check(Schema.isMaxLength(50)),
 });
 export type AnnotationInteractionsReportInput = typeof AnnotationInteractionsReportInput.Type;
+
+/** One press of a chat shortcut that makes annotated words heavier (`1`) or lighter (`-1`) for a while. */
+export const AnnotationIntensityAdjustInput = Schema.Struct({
+  step: Schema.Literals([1, -1]),
+});
+export type AnnotationIntensityAdjustInput = typeof AnnotationIntensityAdjustInput.Type;
+
+/** The collector's temporary chat level after a press, from `-2` to `2`, and when it ends (epoch ms, `0` at level 0). */
+export const AnnotationIntensity = Schema.Struct({
+  level: Schema.Int.check(Schema.isBetween({ minimum: -2, maximum: 2 })),
+  until: Schema.Finite,
+});
+export type AnnotationIntensity = typeof AnnotationIntensity.Type;
+
+export class AnnotationIntensityError extends Schema.TaggedError<AnnotationIntensityError>()(
+  "AnnotationIntensityError",
+  { detail: Schema.String },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}

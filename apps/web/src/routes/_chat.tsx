@@ -30,6 +30,8 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
+import { annotationIntensityStep } from "~/components/chat/annotationIntensity";
+import { useAdjustAnnotationIntensity } from "~/components/chat/AnnotationIntensityToast";
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -46,6 +48,7 @@ function ChatRouteGlobalShortcuts() {
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { scratchEnvironmentId, startScratchThread } = useScratchProject();
+  const adjustAnnotationIntensity = useAdjustAnnotationIntensity();
   const projectGroupCount = useMemo(
     () =>
       buildSidebarProjectSnapshots({
@@ -84,6 +87,16 @@ function ChatRouteGlobalShortcuts() {
       });
 
       if (isCommandPaletteOpen()) {
+        return;
+      }
+
+      const annotationStep = annotationIntensityStep(command);
+      if (annotationStep !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        // This client's own server forwards to the collector; the server hosting the thread may be a stock build.
+        const environmentId = primaryEnvironmentId ?? routeThreadRef?.environmentId ?? null;
+        if (!event.repeat) void adjustAnnotationIntensity(environmentId, annotationStep);
         return;
       }
 
@@ -196,6 +209,7 @@ function ChatRouteGlobalShortcuts() {
   }, [
     activeDraftThread,
     activeThread,
+    adjustAnnotationIntensity,
     clearSelection,
     canOperatePreview,
     handleNewThread,

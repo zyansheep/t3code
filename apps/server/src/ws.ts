@@ -114,7 +114,10 @@ import { RpcSerialization, RpcServer } from "effect/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
-import { forwardAnnotationInteractions } from "./annotationInteractions.ts";
+import {
+  adjustAnnotationIntensity,
+  forwardAnnotationInteractions,
+} from "./annotationInteractions.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -2464,6 +2467,8 @@ const layerWsRpc = (
           ),
         [WS_METHODS.serverReportAnnotationInteractions]: (input) =>
           forwardAnnotationInteractions(input).pipe(Effect.provide(FetchHttpClient.layer)),
+        [WS_METHODS.serverAdjustAnnotationIntensity]: (input) =>
+          adjustAnnotationIntensity(input).pipe(Effect.provide(FetchHttpClient.layer)),
         [WS_METHODS.serverReportHostPowerState]: (input) =>
           backgroundPolicy.reportHostPowerState(input),
         [WS_METHODS.serverGetBackgroundPolicy]: (_input) => backgroundPolicy.snapshot,

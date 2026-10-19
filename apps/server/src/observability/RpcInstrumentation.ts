@@ -83,6 +83,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverSignalProcess]: "server",
   [WS_METHODS.serverReportClientActivity]: "server",
   [WS_METHODS.serverReportAnnotationInteractions]: "server",
+  [WS_METHODS.serverAdjustAnnotationIntensity]: "server",
   [WS_METHODS.serverReportHostPowerState]: "server",
   [WS_METHODS.serverGetBackgroundPolicy]: "server",
   [WS_METHODS.scheduledTasksList]: "scheduledTasks",
