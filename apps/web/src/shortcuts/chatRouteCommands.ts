@@ -1,6 +1,7 @@
 import { AuthPreviewOperateScope, type EnvironmentId } from "@t3tools/contracts";
 import type { AnyRouter } from "@tanstack/react-router";
 
+import { adjustAnnotationIntensityWithToast } from "~/components/chat/AnnotationIntensityToast";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { isPreviewAvailableFor } from "../browser/previewRuntime";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
@@ -96,6 +97,18 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
     void startNewThreadFromContext(readThreadContext());
   };
 
+  const adjustAnnotations =
+    (step: 1 | -1): CommandHandler =>
+    (event) => {
+      claim(event);
+      // This client's own server forwards to the collector; the server hosting the thread may be a stock build.
+      const environmentId =
+        appAtomRegistry.get(primaryEnvironmentIdAtom) ??
+        readRouteThreadRef()?.environmentId ??
+        null;
+      if (!event.repeat) void adjustAnnotationIntensityWithToast(environmentId, step);
+    };
+
   const previewCommand =
     (action: PreviewAction): CommandHandler =>
     (event) => {
@@ -150,6 +163,8 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
       "preview.zoomIn": previewCommand("zoom-in"),
       "preview.zoomOut": previewCommand("zoom-out"),
       "preview.resetZoom": previewCommand("reset-zoom"),
+      "annotations.heavier": adjustAnnotations(1),
+      "annotations.lighter": adjustAnnotations(-1),
     },
     {
       when: () =>

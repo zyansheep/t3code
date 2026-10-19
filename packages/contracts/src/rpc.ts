@@ -82,7 +82,12 @@ import {
   EnvironmentAuthorizationError,
 } from "./auth.ts";
 import { ClientActivityReportInput } from "./background.ts";
-import { AnnotationInteractionsReportInput } from "./annotationInteractions.ts";
+import {
+  AnnotationIntensity,
+  AnnotationIntensityAdjustInput,
+  AnnotationIntensityError,
+  AnnotationInteractionsReportInput,
+} from "./annotationInteractions.ts";
 import {
   FilesystemGetMetadataInput,
   FilesystemGetMetadataResult,
@@ -527,6 +532,7 @@ export const WS_METHODS = {
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
   serverReportAnnotationInteractions: "server.reportAnnotationInteractions",
+  serverAdjustAnnotationIntensity: "server.adjustAnnotationIntensity",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
@@ -983,6 +989,12 @@ const WsServerReportAnnotationInteractionsRpc = Rpc.make(
     error: EnvironmentAuthorizationError,
   },
 );
+
+const WsServerAdjustAnnotationIntensityRpc = Rpc.make(WS_METHODS.serverAdjustAnnotationIntensity, {
+  payload: AnnotationIntensityAdjustInput,
+  success: AnnotationIntensity,
+  error: Schema.Union([AnnotationIntensityError, EnvironmentAuthorizationError]),
+});
 
 const PullRequestRpcError = Schema.Union([
   PullRequestUnavailableError,
@@ -2009,6 +2021,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,
   WsServerReportAnnotationInteractionsRpc,
+  WsServerAdjustAnnotationIntensityRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,

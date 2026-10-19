@@ -236,6 +236,9 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+2", command: "usage.period.week", when: "usagePageOpen" },
   { key: "mod+shift+3", command: "usage.period.month", when: "usagePageOpen" },
   { key: "mod+shift+4", command: "usage.period.quarter", when: "usagePageOpen" },
+  // Vendored: chat annotations (a language-learning tool's Japanese words) heavier or lighter for a while.
+  { key: "alt+shift+.", command: "annotations.heavier", when: "!terminalFocus" },
+  { key: "alt+shift+,", command: "annotations.lighter", when: "!terminalFocus" },
 ];
 
 function normalizeKeyToken(token: string): string {
