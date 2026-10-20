@@ -63,4 +63,9 @@ describe("annotationIntensityTitle", () => {
     expect(title(-2, until)).toBe("Chat Japanese: lighter (-2) until 9:40 PM");
     expect(title(0, 0)).toBe("Chat Japanese: normal");
   });
+
+  it("names the ends of the scale off and full", () => {
+    expect(title(-3, until)).toBe("Chat Japanese: off until 9:40 PM");
+    expect(title(3, until)).toBe("Chat Japanese: full (+3) until 9:40 PM");
+  });
 });
