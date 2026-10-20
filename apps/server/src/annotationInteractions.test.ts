@@ -122,6 +122,18 @@ describe("adjustAnnotationIntensity", () => {
     }),
   );
 
+  it.effect("accepts the ends of the scale, off (-3) and full (+3)", () =>
+    Effect.gen(function* () {
+      for (const level of [-3, 3]) {
+        const { run } = adjustWith(configured, {
+          status: 200,
+          body: { ok: true, intensity: { level, until: 1_800_000_600_000, at: 1_800_000_000_000 } },
+        });
+        assert.deepStrictEqual(yield* run, { level, until: 1_800_000_600_000 });
+      }
+    }),
+  );
+
   it.effect("fails as not configured without a collector, sending nothing", () =>
     Effect.gen(function* () {
       const { requests, run } = adjustWith({}, { status: 200, body: { ok: true } });

@@ -102,9 +102,12 @@ export const AnnotationIntensityAdjustInput = Schema.Struct({
 });
 export type AnnotationIntensityAdjustInput = typeof AnnotationIntensityAdjustInput.Type;
 
-/** The collector's temporary chat level after a press, from `-2` to `2`, and when it ends (epoch ms, `0` at level 0). */
+/**
+ * The collector's temporary chat level after a press, from `-3` (no Japanese) to `3` (everything that can be Japanese
+ * is), and when it ends (epoch ms, `0` at level 0).
+ */
 export const AnnotationIntensity = Schema.Struct({
-  level: Schema.Int.check(Schema.isBetween({ minimum: -2, maximum: 2 })),
+  level: Schema.Int.check(Schema.isBetween({ minimum: -3, maximum: 3 })),
   until: Schema.Finite,
 });
 export type AnnotationIntensity = typeof AnnotationIntensity.Type;
