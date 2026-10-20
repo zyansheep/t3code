@@ -6,6 +6,7 @@ import {
   IDLE_MS,
   PAUSE_MS,
   account,
+  countWords,
   flush,
   newStay,
   readingState,
@@ -35,6 +36,20 @@ class FakeIntersectionObserver {
 }
 
 const page = { hidden: false, focused: true, playing: false, lastInput: 0 };
+
+describe("word counts", () => {
+  it("counts English words and annotated words, not Japanese around them, code, or sentence translations", () => {
+    const el = document.createElement("div");
+    el.innerHTML =
+      '<p>Don’t skip the <abbr data-markdown-abbreviation="">猫</abbr>は well-known 3 steps: run ' +
+      "<code>npm install --force</code> and press <kbd>Ctrl</kbd> twice.</p>" +
+      '<p>東京Tower <abbr data-markdown-abbreviation="">雨が降った</abbr>' +
+      '<abbr data-markdown-abbreviation="">。</abbr><abbr data-markdown-abbreviation="">？</abbr></p>' +
+      "<pre><code>const words = 0;</code></pre>";
+    // Don’t skip the 猫 well-known 3 steps run and press twice / Tower 雨が降った
+    expect(countWords(el)).toBe(13);
+  });
+});
 
 describe("on-screen time", () => {
   it("counts only time a reader could spend reading; the rest by why not", () => {
@@ -71,22 +86,30 @@ describe("reading signals in a message", () => {
     vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
   });
 
-  const setup = () => {
-    vi.useFakeTimers({ now: 1_800_000_000_000 });
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    report.mockClear();
+  let context = "";
+  let contexts = 0;
+  const mount = () => {
     container = document.createElement("div");
     container.innerHTML =
       '<p id="first">Read the <abbr data-markdown-abbreviation="">CSP</abbr> notes.</p>' +
       '<p id="second">Then set <abbr data-markdown-abbreviation="">HSTS</abbr> <a href="#x">here</a>.</p>' +
       "<p>No annotation in this one.</p>";
     document.body.append(container);
-    stop = registerReadingMessage({ container, view: "v1", context: "m1", report });
+    stop = registerReadingMessage({ container, view: "v1", context, report });
+  };
+  // Each test is another message: one is sent as shown once per renderer session.
+  const setup = () => {
+    vi.useFakeTimers({ now: 1_800_000_000_000 });
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    report.mockClear();
+    context = `m${++contexts}`;
+    mount();
   };
   const sent = () => {
     flush();
     return report.mock.calls.flatMap(([items]) => items);
   };
+  const stays = () => sent().filter((item) => item.kind === "visible");
 
   afterEach(() => {
     stop();
@@ -113,7 +136,7 @@ describe("reading signals in a message", () => {
     ]);
     expect(items[0]).toMatchObject({
       view: "v1",
-      context: "m1",
+      context,
       annotations: [
         ["CSP", 0, 0],
         ["HSTS", 0, 0],
@@ -179,10 +202,11 @@ describe("reading signals in a message", () => {
     observer.show(first, true);
     vi.advanceTimersByTime(300);
     observer.show(first, false);
-    const items = sent();
+    const items = stays();
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "visible",
+      words: 4, // Read the CSP notes
       ms: IDLE_MS,
       idle: 10_000,
       away: 0,
@@ -204,10 +228,36 @@ describe("reading signals in a message", () => {
     document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
     vi.advanceTimersByTime(3_000);
     observer.show(first, false);
-    const items = sent();
+    const items = stays();
     expect(items.map((item) => item.kind === "visible" && item.ms)).toEqual([5_000, 3_000]);
     const [left] = items;
     expect(left).toMatchObject({ kind: "visible", idle: 0 });
     expect(left?.kind === "visible" && left.wall).toBeLessThan(5_000 + PAUSE_MS + 2_000); // not the whole time away
+  });
+
+  it("reports a message's word count when it is first on screen, once even if it remounts", () => {
+    setup();
+    const observer = FakeIntersectionObserver.last!;
+    document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    observer.show(container.querySelector("#first")!, true);
+    observer.show(container.querySelector("#second")!, true);
+    vi.advanceTimersByTime(2_000);
+    stop(); // scrolled away in a virtualized list, then back
+    container.remove();
+    mount();
+    observer.show(container.querySelector("#first")!, true);
+    vi.advanceTimersByTime(2_000);
+    observer.show(container.querySelector("#first")!, false);
+    const items = sent();
+    expect(items.filter((item) => item.kind === "shown")).toEqual([
+      expect.objectContaining({
+        kind: "shown",
+        at: 1_800_000_000_000,
+        view: "v1",
+        context,
+        words: 13, // all three paragraphs, the one without an annotation too
+      }),
+    ]);
+    expect(items.filter((item) => item.kind === "visible")).toHaveLength(3);
   });
 });

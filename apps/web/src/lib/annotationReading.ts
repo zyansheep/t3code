@@ -2,8 +2,9 @@ import type { AnnotationReading } from "@t3tools/contracts";
 
 /**
  * Where a reader was in chat messages with `<abbr>` annotations, for the collector that also receives popover opens
- * (`reportAnnotationInteractions`): clicks, text selections, mouse paths and each paragraph's stays on screen. Positions,
- * times and counts only, never text. One set of document listeners serves every registered message.
+ * (`reportAnnotationInteractions`): clicks, text selections, mouse paths, each paragraph's stays on screen, and each
+ * message's word count the first time it is on screen (`shown`). Positions, times and counts only, never text. One set
+ * of document listeners serves every registered message.
  *
  * A stay's `ms` counts only time a reader could have spent reading: the window visible and focused, no sound or video
  * playing, and some input in the last `IDLE_MS`. The rest of its time on screen goes to `away`, `media` or `idle`. A stay
@@ -27,6 +28,12 @@ const CLICK_GAP_MS = 300;
 const FLUSH_MS = 5_000;
 const BATCH_MAX = 50;
 const BLOCK_SELECTOR = "p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, dt, dd";
+// Code, and text the message doesn't say (a code block's title, an alert's label, controls).
+const UNCOUNTED_SELECTOR = 'pre, code, kbd, svg, [data-thread-find-ignore], [role="toolbar"]';
+const LATIN = String.raw`(?:(?![\p{scx=Han}\p{scx=Hira}\p{scx=Kana}])[\p{L}\p{N}])+`;
+const WORD = new RegExp(`${LATIN}(?:['’-]${LATIN})*`, "gu");
+const WORDLIKE = /[\p{L}\p{N}]/u;
+const SHOWN_MAX_WORDS = 10_000;
 const CONTROL_SELECTOR =
   'a[href], button, input, select, textarea, summary, label, [role="button"], [role="link"]';
 
@@ -72,6 +79,32 @@ export function describeAnnotations(container: HTMLElement) {
     }),
   };
   return { triggers, rect: box, place };
+}
+
+/**
+ * The words a reader reads in an element: Latin-script words in its text outside code, plus one per annotation with a
+ * letter or digit in it (one of only punctuation, like 。, translates a sentence). Japanese outside annotations, such as
+ * particles, is not counted.
+ */
+export function countWords(el: Element): number {
+  let words = 0;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (node.nodeType === Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
+      const element = node as Element;
+      if (element.matches(ANNOTATION_SELECTOR)) {
+        if (WORDLIKE.test(element.textContent ?? "")) words += 1;
+        return NodeFilter.FILTER_REJECT;
+      }
+      return element.matches(UNCOUNTED_SELECTOR)
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_SKIP;
+    },
+  });
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    words += node.nodeValue?.match(WORD)?.length ?? 0;
+  }
+  return words;
 }
 
 export function readingState(
@@ -123,7 +156,7 @@ interface Registered extends ReadingMessage {
 }
 interface BlockStay extends Stay {
   readonly message: Registered;
-  readonly snapshot: { place: Place; y: number; height: number };
+  readonly snapshot: { place: Place; y: number; height: number; words: number };
 }
 interface Trace {
   readonly message: Registered;
@@ -137,6 +170,7 @@ const inView = new Set<Element>();
 const stays = new Map<Element, BlockStay>();
 const playing = new Set<HTMLMediaElement>();
 const queue = new Map<Report, AnnotationReading[]>();
+const shown = new Set<string>(); // view and context of each message sent as shown, so a remount doesn't resend it
 let observer: IntersectionObserver | null = null;
 let listening = false;
 let lastInput = Date.now();
@@ -306,12 +340,19 @@ function band(block: Element, container: HTMLElement) {
 function startStay(block: Element) {
   const message = blockOwners.get(block);
   if (!message || stays.has(block) || document.visibilityState === "hidden") return;
+  const now = Date.now();
   const snapshot = {
     place: describeAnnotations(message.container).place,
     ...band(block, message.container),
+    words: countWords(block),
   };
-  stays.set(block, { ...newStay(Date.now()), message, snapshot });
+  stays.set(block, { ...newStay(now), message, snapshot });
   ticker ??= setInterval(tick, 1_000);
+  const key = `${message.view} ${message.context}`;
+  if (shown.has(key)) return;
+  shown.add(key);
+  const words = Math.min(countWords(message.container), SHOWN_MAX_WORDS);
+  if (words > 0) enqueue(message, { ...base(message, now, snapshot.place), kind: "shown", words });
 }
 
 function endStay(block: Element) {
@@ -334,6 +375,7 @@ function endStay(block: Element) {
     kind: "visible",
     y: where.y,
     height: where.height,
+    words: fresh ? countWords(block) : stay.snapshot.words,
     ms: stay.ms,
     wall: stay.wall,
     away: stay.away,
