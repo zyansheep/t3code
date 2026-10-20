@@ -15,16 +15,16 @@ import { annotationIntensityTitle } from "./annotationIntensity";
 
 // One toast for every press, so a new press updates it instead of stacking another.
 const TOAST_ID = "annotation-intensity";
-const LEVELS = [-2, -1, 0, 1, 2] as const;
+const LEVELS = [-3, -2, -1, 0, 1, 2, 3] as const;
 
-/** Five steps from lighter (-2) to heavier (+2), filled from normal toward the current level. */
+/** Seven steps from off (-3) to full (+3), filled from normal toward the current level. */
 function AnnotationIntensityMeter({ level }: { level: number }) {
   return (
     <span
       role="meter"
       aria-label="Chat Japanese level"
-      aria-valuemin={-2}
-      aria-valuemax={2}
+      aria-valuemin={-3}
+      aria-valuemax={3}
       aria-valuenow={level}
       className="inline-flex shrink-0 items-center gap-0.5"
     >
@@ -54,7 +54,13 @@ function showIntensity(intensity: AnnotationIntensity) {
     description: (
       <span className="mt-0.5 flex items-center gap-2">
         <AnnotationIntensityMeter level={intensity.level} />
-        <span>Applies from your next message</span>
+        <span>
+          {intensity.level <= -3
+            ? "No Japanese from your next message"
+            : intensity.level >= 3
+              ? "As much Japanese as fits, from your next message"
+              : "Applies from your next message"}
+        </span>
       </span>
     ),
     timeout: 4000,
