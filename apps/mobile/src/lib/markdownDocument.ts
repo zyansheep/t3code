@@ -3,6 +3,7 @@ import { unified, type Processor } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
+import { glossHref } from "./markdownGlosses";
 
 const parser = unified().use(remarkParse).use(remarkGfm);
 export type MarkdownNode = Root | RootContent;
@@ -79,7 +80,8 @@ function markdownDestination(url: string): string {
   return `<${url.replace(/&/g, "\\&").replace(/</g, "%3C").replace(/>/g, "%3E").replace(/\|/g, "%7C").replace(/\n/g, "")}>`;
 }
 
-const ANCHOR_TAG = /^<\/?a[\s/>]/i;
+const ANCHOR_TAG = /^<\/?(?:a|abbr)[\s/>]/i;
+const ABBR_TAG = /^<\/?abbr[\s/>]/i;
 
 /** Replacements for the anchor tags still ahead, and how many emitted links are open. */
 type AnchorState = { readonly pending: string[]; open: number };
@@ -104,20 +106,34 @@ function bangBefore(text: string, index: number): boolean {
 }
 
 /**
- * Pairs `<a>` tags in order. Only a closed anchor with an http(s) or mailto href becomes a
- * Markdown link; any other anchor keeps its text unlinked.
+ * Pairs `<a>` and `<abbr>` tags in order. Only a closed anchor with an http(s) or mailto href
+ * becomes a Markdown link; any other anchor keeps its text unlinked. An `<abbr>` with a title
+ * becomes a gloss link (markdownGlosses.ts) unless it sits in a link or holds one.
  */
-function anchorMarkdown(tags: readonly string[]): AnchorState {
+function anchorMarkdown(tags: readonly string[], glosses = true): AnchorState {
   const replacements = tags.map(() => "");
-  const open: Array<{ index: number; href: string | undefined }> = [];
+  const open: Array<{ index: number; href: string | undefined; gloss: boolean; holds: boolean }> =
+    [];
   tags.forEach((tag, index) => {
+    const gloss = ABBR_TAG.test(tag);
     if (tag[1] !== "/") {
-      const href = attribute(tag, "href")?.trim();
-      open.push({ index, href: href && /^(?:https?|mailto):/i.test(href) ? href : undefined });
+      const href = gloss
+        ? glosses
+          ? glossHref(attribute(tag, "title"))
+          : undefined
+        : attribute(tag, "href")?.trim();
+      open.push({
+        index,
+        gloss,
+        holds: false,
+        href: gloss || (href && /^(?:https?|mailto):/i.test(href)) ? href : undefined,
+      });
       return;
     }
     const opening = open.pop();
-    if (!opening?.href) return;
+    if (!opening?.href || opening.gloss !== gloss) return;
+    if (gloss && (opening.holds || open.some((outer) => outer.href && !outer.gloss))) return;
+    for (const outer of open) outer.holds = true;
     replacements[opening.index] = "[";
     replacements[index] = `](${markdownDestination(opening.href)})`;
   });
@@ -251,6 +267,7 @@ export function markdownWithHtml(markdown: string): string {
                     .filter((tag) => ANCHOR_TAG.test(tag))
                 : [],
             ),
+            !inLink && node.type !== "link" && node.type !== "linkReference",
           );
     for (const child of children) {
       const start = child.position?.start.offset;
