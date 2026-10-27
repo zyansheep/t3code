@@ -2921,6 +2921,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ],
       desktop: {
         entry: {
+          // The fork's name in the launcher; productName, which keys the install, stays upstream's.
+          Name: "Z3 Code",
           // Match Electron's WM_CLASS from setDesktopName so docks use this launcher.
           StartupWMClass: "com.t3tools.T3Code",
         },
