@@ -2915,6 +2915,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ],
       desktop: {
         entry: {
+          // The fork's name in the launcher; productName, which keys the install, stays upstream's.
+          Name: "Z3 Code",
           StartupWMClass: "t3code",
         },
       },
