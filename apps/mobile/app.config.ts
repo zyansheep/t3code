@@ -114,6 +114,10 @@ function resolveAppVariant(value: string | undefined): AppVariant {
 }
 
 const variant = VARIANT_CONFIG[APP_VARIANT];
+// A build of a fork, signed with its own key, installs beside the official app under its own id.
+const androidPackage = repoEnv.T3CODE_ANDROID_PACKAGE?.trim() || variant.androidPackage;
+const appName = repoEnv.T3CODE_APP_NAME?.trim() || variant.appName;
+const androidVersionCode = Number(repoEnv.T3CODE_ANDROID_VERSION_CODE) || undefined;
 const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
   : variant.iosBundleIdentifier;
@@ -222,7 +226,7 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
 // Match iOS PostScript names on Android so RN and the native composer share fonts before runtime loading.
 
 const config: ExpoConfig = {
-  name: variant.appName,
+  name: appName,
   slug: "t3-code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
@@ -284,7 +288,8 @@ const config: ExpoConfig = {
   },
   android: {
     icon: variant.assets.appIcon,
-    package: variant.androidPackage,
+    package: androidPackage,
+    ...(androidVersionCode ? { versionCode: androidVersionCode } : {}),
     ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE
       ? { googleServicesFile: repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE }
       : {}),
