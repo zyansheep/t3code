@@ -11,6 +11,13 @@ import {
   markdownWithInlineFileLinks,
   markdownWithTableBreaks,
 } from "../lib/markdownDocument";
+import {
+  GLOSS_LINK_PATTERN,
+  glossOf,
+  hasGlossLinks,
+  isGlossHref,
+  markdownWithGlosses,
+} from "../lib/markdownGlosses";
 import { isValidElement, useMemo, useState, type ReactNode } from "react";
 import { Platform, Share, StyleSheet, useWindowDimensions, View } from "react-native";
 import {
@@ -178,9 +185,26 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     const files = markdownWithFileEmbeds(content, fileEmbedLabel);
     return { ...files, markdown: markdownWithTableBreaks(files.markdown) };
   }, [props.markdown, fileEmbedLabel]);
+  // Glossed words a tap has opened, by occurrence: each shows its gloss until tapped again.
+  const [openGlosses, setOpenGlosses] = useState<ReadonlySet<number>>(() => new Set());
+  const glossed = hasGlossLinks(markdown);
+  const rendered = useMemo(
+    () => markdownWithGlosses(markdown, openGlosses),
+    [markdown, openGlosses],
+  );
+  const toggleGloss = (url: string) => {
+    const gloss = glossOf(url);
+    if (!gloss) return;
+    setOpenGlosses((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(gloss.index)) next.add(gloss.index);
+      return next;
+    });
+  };
   const [parsedLinkUrls, setParsedLinkUrls] = useState<ReadonlyArray<string>>([]);
   const onLinksChange = (links: MarkdownLinkOccurrence[]) => {
-    const urls = [...new Set(links.map((link) => link.url))];
+    // Glosses take no pill, icon or link menu.
+    const urls = [...new Set(links.map((link) => link.url).filter((url) => !isGlossHref(url)))];
     setParsedLinkUrls((previous) =>
       previous.length === urls.length && previous.every((url, index) => url === urls[index])
         ? previous
@@ -208,7 +232,9 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   } | null>(null);
   const { fileContextMenu, onFileContextMenuAction } = props;
   const onLinkPress = (url: string) =>
-    (fileHrefs.has(url) ? (props.onImagePress ?? props.onLinkPress) : props.onLinkPress)?.(url);
+    isGlossHref(url)
+      ? toggleGloss(url)
+      : (fileHrefs.has(url) ? (props.onImagePress ?? props.onLinkPress) : props.onLinkPress)?.(url);
   const performMenuAction = (url: string, actionId: string) => {
     if (actionId === "enriched-open-link") onLinkPress(url);
     else if (actionId === "enriched-copy-link") copyTextWithHaptic(url);
@@ -267,7 +293,10 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   const markdownStyle = useMemo(
     () => ({
       ...enrichedStyle(props.textStyle, themeAppearance === "dark", fontScale),
-      linkVariants,
+      linkVariants: {
+        ...linkVariants,
+        [GLOSS_LINK_PATTERN]: { color: props.textStyle.color, underline: true },
+      },
     }),
     [props.textStyle, themeAppearance, fontScale, linkVariants],
   );
@@ -288,6 +317,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     const onLinkLongPress =
       Platform.OS === "android" && props.fileContextMenu
         ? ({ url }: { url: string }) => {
+            if (isGlossHref(url)) return toggleGloss(url);
             const menu = props.fileContextMenu?.(url) ?? {
               title: url,
               actions: [
@@ -310,7 +340,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
         }}
       >
         <EnrichedMarkdownText
-          markdown={markdown}
+          markdown={rendered}
           markdownStyle={markdownStyle}
           onLinksChange={onLinksChange}
           renderers={renderers}
@@ -337,7 +367,9 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
           enableCodeBlockWrapToggle
           spoilerOverlay="solid"
           onLinkPress={
-            props.onLinkPress || props.onImagePress ? ({ url }) => onLinkPress(url) : undefined
+            props.onLinkPress || props.onImagePress || glossed
+              ? ({ url }) => onLinkPress(url)
+              : undefined
           }
           onLinkLongPress={onLinkLongPress}
           linkContextMenuItems={linkContextMenuItems}
