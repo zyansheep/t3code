@@ -43,6 +43,20 @@ vi.mock(import("../state/session"), async (original) => {
     readEnvironmentScope: hasScope as never,
   };
 });
+const { annotationReport } = vi.hoisted(() => ({
+  annotationReport: vi.fn(async (_report: unknown) => ({ _tag: "Success" })),
+}));
+vi.mock(import("../state/use-atom-command"), async (original) => {
+  const actual = await original();
+  const { reportAnnotationInteractions } = await import("../state/annotationInteractions");
+  return {
+    ...actual,
+    useAtomCommand: ((command: unknown, options: unknown) =>
+      command === reportAnnotationInteractions
+        ? annotationReport
+        : actual.useAtomCommand(command as never, options as never)) as never,
+  };
+});
 vi.mock(import("../remoteOpen"), async (original) => ({
   ...(await original()),
   useRemoteOpenResolution: () => ({ state: { mode: "local-exec" }, isResolved: true }) as never,
@@ -100,6 +114,7 @@ it("keeps compact audio playback loaded across signed URL renewals", async () =>
 
 function setup() {
   settingsOverrides.mathRenderingEnabled = false;
+  annotationReport.mockClear();
   renderDiagram.mockReset();
   workspaceSearch.mockReset().mockResolvedValue(AsyncResult.success({ entries: [] }));
   filesystemMetadata.mockReset().mockResolvedValue(AsyncResult.success({ entries: [null] }));
@@ -386,5 +401,35 @@ describe("ChatMarkdown abbreviations", () => {
 
     await userEvent.click(abbreviation);
     await expect.element(page.getByText("Content Security Policy")).toBeVisible();
+  });
+
+  it("reports a pinned abbreviation with every abbreviation of its message when it closes", async () => {
+    setup();
+    const environmentId = EnvironmentId.make("environment-abbr");
+    await using screen = await renderText(
+      'Set a <abbr title="Content Security Policy">CSP</abbr> and <abbr title="HTTP Strict Transport Security">HSTS</abbr> header.',
+      { environmentId },
+    );
+    const abbreviation = screen.container.querySelector("abbr")!;
+    await userEvent.click(abbreviation);
+    await expect.element(page.getByText("Content Security Policy")).toBeVisible();
+    await userEvent.click(abbreviation);
+
+    await vi.waitFor(() => expect(annotationReport).toHaveBeenCalledTimes(1));
+    const [report] = annotationReport.mock.calls[0] as unknown as [
+      { environmentId: string; input: { items: Array<Record<string, unknown>> } },
+    ];
+    expect(report.environmentId).toBe(environmentId);
+    expect(report.input.items).toHaveLength(1);
+    expect(report.input.items[0]).toMatchObject({
+      kind: "pin",
+      word: "CSP",
+      position: 0,
+      annotations: [
+        ["CSP", expect.any(Number), expect.any(Number)],
+        ["HSTS", expect.any(Number), expect.any(Number)],
+      ],
+    });
+    expect(JSON.stringify(report)).not.toContain("header");
   });
 });

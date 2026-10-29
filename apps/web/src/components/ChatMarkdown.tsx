@@ -9,6 +9,7 @@ import {
 import { isHostPath, resolveWorkspaceFilePath } from "@t3tools/shared/path";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import {
+  type AnnotationInteraction,
   AuthFilesystemReadScope,
   AuthOrchestrationOperateScope,
   SOURCE_CONTROL_MEDIA_ASSET,
@@ -130,7 +131,7 @@ import {
   usePreferredEditor,
 } from "../editorPreferences";
 import { openInEditorMenuLabel } from "../editorLabels";
-import { resolveDiffThemeName } from "../lib/diffRendering";
+import { fnv1a32, resolveDiffThemeName } from "../lib/diffRendering";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
 import { useRenderedAppearance } from "../hooks/useTheme";
 import { useClientSettings } from "../hooks/useSettings";
@@ -163,6 +164,7 @@ import {
 } from "../state/session";
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
+import { reportAnnotationInteractions } from "../state/annotationInteractions";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { projectEnvironment } from "../state/projects";
 import { filesystemEnvironment } from "../state/filesystem";
@@ -933,6 +935,51 @@ const MarkdownAbbreviationContext = React.createContext<ReturnType<
   typeof PopoverCreateHandle<string>
 > | null>(null);
 const ABBREVIATION_HOVER_DELAY_MS = 300;
+const ABBREVIATION_SELECTOR = "abbr[data-markdown-abbreviation]";
+const ANNOTATION_TEXT_MAX_LENGTH = 40;
+const ANNOTATION_MAX_COUNT = 200;
+// One renderer session (its start time), so a reader's later visits to the same message stay apart.
+const ANNOTATION_VIEW = `v${Math.round(performance.timeOrigin).toString(36)}`;
+
+interface OpenAbbreviation {
+  readonly trigger: Element;
+  readonly at: number;
+  kind: "peek" | "pin";
+}
+
+/**
+ * The opened abbreviation plus every abbreviation in the same message, by text and position only. Unopened ones next
+ * to an opened one are the evidence an external tool (a language learner's word tracker) needs.
+ */
+function abbreviationInteraction(
+  container: HTMLElement,
+  opened: OpenAbbreviation,
+  now: number,
+  text: string,
+): AnnotationInteraction | null {
+  const triggers = [...container.querySelectorAll(ABBREVIATION_SELECTOR)]
+    .map((trigger) => ({ trigger, text: trigger.textContent?.trim() ?? "" }))
+    .filter((entry) => entry.text.length > 0 && entry.text.length <= ANNOTATION_TEXT_MAX_LENGTH)
+    .slice(0, ANNOTATION_MAX_COUNT);
+  const position = triggers.findIndex((entry) => entry.trigger === opened.trigger);
+  const word = triggers[position]?.text;
+  if (word === undefined) return null;
+  const box = container.getBoundingClientRect();
+  return {
+    kind: opened.kind,
+    word,
+    at: opened.at,
+    dwellMs: Math.max(0, now - opened.at),
+    view: ANNOTATION_VIEW,
+    context: `m${fnv1a32(text).toString(36)}`,
+    position,
+    box: [box.left, box.top, box.width, box.height],
+    annotations: triggers.map(({ trigger, text: entryText }) => {
+      const rect = trigger.getBoundingClientRect();
+      return [entryText, rect.left - box.left, rect.top - box.top] as const;
+    }),
+  };
+}
 
 function markdownHeadingRenderer(level: 1 | 2 | 3 | 4 | 5 | 6) {
   const Tag = `h${level}` as const;
@@ -993,6 +1040,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
         render={
           <abbr
             {...props}
+            data-markdown-abbreviation=""
             className="cursor-help underline decoration-dotted decoration-muted-foreground/60 underline-offset-2"
           />
         }
@@ -1689,6 +1737,38 @@ function ChatMarkdown({
   // Only messages with raw <abbr> markup mount the shared expansion popover.
   const hasAbbreviations = parseRawHtml && /<abbr\b/i.test(text);
   const [abbreviationPopover] = useState(() => PopoverCreateHandle<string>());
+  const reportAnnotations = useAtomCommand(reportAnnotationInteractions, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const openAbbreviation = useRef<OpenAbbreviation | null>(null);
+  const environmentId = props.environmentId;
+  const finishAbbreviation = () => {
+    const opened = openAbbreviation.current;
+    openAbbreviation.current = null;
+    const container = markdownRef.current;
+    if (!opened || !environmentId || !container) return;
+    const item = abbreviationInteraction(container, opened, Date.now(), text);
+    if (item) void reportAnnotations({ environmentId, input: { items: [item] } });
+  };
+  // Hover is a peek and a click, tap or Enter pins the expansion; a focus-only open is not counted, since scripts
+  // and keyboard navigation move focus without the reader asking for the meaning.
+  const handleAbbreviationOpenChange = (
+    open: boolean,
+    reason: string,
+    trigger: Element | undefined,
+  ) => {
+    if (openAbbreviation.current && (!open || openAbbreviation.current.trigger !== trigger)) {
+      finishAbbreviation();
+    }
+    const kind = reason === "trigger-hover" ? "peek" : reason === "trigger-press" ? "pin" : null;
+    if (!open || !kind || !trigger) return;
+    if (openAbbreviation.current) {
+      if (kind === "pin") openAbbreviation.current.kind = "pin";
+      return;
+    }
+    openAbbreviation.current = { trigger, at: Date.now(), kind };
+  };
 
   return (
     <Root
@@ -1705,24 +1785,29 @@ function ChatMarkdown({
       <ChatMarkdownRendererContext value={componentState}>
         <ChatMarkdownTextContext value={text}>
           <MarkdownAbbreviationContext value={hasAbbreviations ? abbreviationPopover : null}>
-          <ReactMarkdown
-            remarkPlugins={remarkPlugins}
-            rehypePlugins={
-              parseRawHtml
-                ? CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
-                : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
-            }
-            skipHtml={false}
-            components={CHAT_MARKDOWN_COMPONENTS}
-            urlTransform={markdownUrlTransform}
-          >
-            {text}
-          </ReactMarkdown>
+            <ReactMarkdown
+              remarkPlugins={remarkPlugins}
+              rehypePlugins={
+                parseRawHtml
+                  ? CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
+                  : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
+              }
+              skipHtml={false}
+              components={CHAT_MARKDOWN_COMPONENTS}
+              urlTransform={markdownUrlTransform}
+            >
+              {text}
+            </ReactMarkdown>
           </MarkdownAbbreviationContext>
         </ChatMarkdownTextContext>
       </ChatMarkdownRendererContext>
       {hasAbbreviations ? (
-        <Popover handle={abbreviationPopover}>
+        <Popover
+          handle={abbreviationPopover}
+          onOpenChange={(open, details) =>
+            handleAbbreviationOpenChange(open, details.reason, details.trigger)
+          }
+        >
           {({ payload }) => (
             <PopoverPopup tooltipStyle side="top" initialFocus={false}>
               {payload}
