@@ -85,6 +85,7 @@ import {
   EnvironmentAuthorizationError,
 } from "./auth.ts";
 import { ClientActivityReportInput } from "./background.ts";
+import { AnnotationInteractionsReportInput } from "./annotationInteractions.ts";
 import {
   FilesystemGetMetadataInput,
   FilesystemGetMetadataResult,
@@ -549,6 +550,7 @@ export const WS_METHODS = {
   serverPrepareTriage: "server.prepareTriage",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
+  serverReportAnnotationInteractions: "server.reportAnnotationInteractions",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
@@ -1057,6 +1059,14 @@ const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientAc
   payload: ClientActivityReportInput,
   error: EnvironmentAuthorizationError,
 });
+
+const WsServerReportAnnotationInteractionsRpc = Rpc.make(
+  WS_METHODS.serverReportAnnotationInteractions,
+  {
+    payload: AnnotationInteractionsReportInput,
+    error: EnvironmentAuthorizationError,
+  },
+);
 
 const PullRequestRpcError = Schema.Union([
   PullRequestUnavailableError,
@@ -2182,6 +2192,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,
+  WsServerReportAnnotationInteractionsRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,
