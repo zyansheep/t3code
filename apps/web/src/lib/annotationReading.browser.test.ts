@@ -5,6 +5,7 @@ import {
   IDLE_MS,
   PAUSE_MS,
   account,
+  countWords,
   flush,
   newStay,
   readingState,
@@ -36,6 +37,20 @@ class FakeIntersectionObserver {
 
 const page = { hidden: false, focused: true, playing: false, lastInput: 0 };
 
+describe("word counts", () => {
+  it("counts English words and annotated words, not Japanese around them, code, or sentence translations", () => {
+    const el = document.createElement("div");
+    el.innerHTML =
+      '<p>Don’t skip the <abbr data-markdown-abbreviation="">猫</abbr>は well-known 3 steps: run ' +
+      "<code>npm install --force</code> and press <kbd>Ctrl</kbd> twice.</p>" +
+      '<p>東京Tower <abbr data-markdown-abbreviation="">雨が降った</abbr>' +
+      '<abbr data-markdown-abbreviation="">。</abbr><abbr data-markdown-abbreviation="">？</abbr></p>' +
+      "<pre><code>const words = 0;</code></pre>";
+    // Don’t skip the 猫 well-known 3 steps run and press twice / Tower 雨が降った
+    expect(countWords(el)).toBe(13);
+  });
+});
+
 describe("on-screen time", () => {
   it("counts only time a reader could spend reading; the rest by why not", () => {
     const stay = newStay(0);
@@ -66,11 +81,7 @@ describe("reading signals in a message", () => {
   const report = vi.fn<(items: ReadonlyArray<AnnotationReading>) => void>();
 
   // The message sits at the viewport's origin, so event coordinates are message coordinates.
-  const setup = () => {
-    const observer = stubGlobal("IntersectionObserver", FakeIntersectionObserver);
-    const timers = fakeTimers({ now: 1_800_000_000_000 });
-    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    report.mockClear();
+  const mount = (context: string) => {
     const container = document.createElement("div");
     container.style.cssText = "position: fixed; left: 0; top: 0; width: 400px";
     container.innerHTML =
@@ -78,12 +89,35 @@ describe("reading signals in a message", () => {
       '<p id="second">Then set <abbr data-markdown-abbreviation="">HSTS</abbr> <a href="#x">here</a>.</p>' +
       "<p>No annotation in this one.</p>";
     document.body.append(container);
-    const stop = registerReadingMessage({ container, view: "v1", context: "m1", report });
+    const stop = registerReadingMessage({ container, view: "v1", context, report });
     return {
       container,
       [Symbol.dispose]() {
         stop();
         container.remove();
+      },
+    };
+  };
+  // Each test is another message: one is sent as shown once per renderer session.
+  const setup = () => {
+    const observer = stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    const timers = fakeTimers({ now: 1_800_000_000_000 });
+    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    report.mockClear();
+    const context = `m:${expect.getState().currentTestName}`;
+    let message = mount(context);
+    return {
+      context,
+      get container() {
+        return message.container;
+      },
+      /** Scrolled away in a virtualized list, then back. */
+      remount() {
+        message[Symbol.dispose]();
+        message = mount(context);
+      },
+      [Symbol.dispose]() {
+        message[Symbol.dispose]();
         document.getSelection()?.removeAllRanges();
         focus.mockRestore();
         timers[Symbol.dispose]();
@@ -95,6 +129,7 @@ describe("reading signals in a message", () => {
     flush();
     return report.mock.calls.flatMap(([items]) => items);
   };
+  const stays = () => sent().filter((item) => item.kind === "visible");
 
   it("reports clicks by position and what they hit, but not annotation clicks", () => {
     using reading = setup();
@@ -114,7 +149,7 @@ describe("reading signals in a message", () => {
     ]);
     expect(items[0]).toMatchObject({
       view: "v1",
-      context: "m1",
+      context: reading.context,
       annotations: [
         ["CSP", expect.any(Number), expect.any(Number)],
         ["HSTS", expect.any(Number), expect.any(Number)],
@@ -183,10 +218,11 @@ describe("reading signals in a message", () => {
     observer.show(first, true);
     vi.advanceTimersByTime(300);
     observer.show(first, false);
-    const items = sent();
+    const items = stays();
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "visible",
+      words: 4, // Read the CSP notes
       ms: IDLE_MS,
       idle: 10_000,
       away: 0,
@@ -209,10 +245,34 @@ describe("reading signals in a message", () => {
     document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
     vi.advanceTimersByTime(3_000);
     observer.show(first, false);
-    const items = sent();
+    const items = stays();
     expect(items.map((item) => item.kind === "visible" && item.ms)).toEqual([5_000, 3_000]);
     const [left] = items;
     expect(left).toMatchObject({ kind: "visible", idle: 0 });
     expect(left?.kind === "visible" && left.wall).toBeLessThan(5_000 + PAUSE_MS + 2_000); // not the whole time away
+  });
+
+  it("reports a message's word count when it is first on screen, once even if it remounts", () => {
+    using reading = setup();
+    const observer = FakeIntersectionObserver.last!;
+    document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    observer.show(reading.container.querySelector("#first")!, true);
+    observer.show(reading.container.querySelector("#second")!, true);
+    vi.advanceTimersByTime(2_000);
+    reading.remount();
+    observer.show(reading.container.querySelector("#first")!, true);
+    vi.advanceTimersByTime(2_000);
+    observer.show(reading.container.querySelector("#first")!, false);
+    const items = sent();
+    expect(items.filter((item) => item.kind === "shown")).toEqual([
+      expect.objectContaining({
+        kind: "shown",
+        at: 1_800_000_000_000,
+        view: "v1",
+        context: reading.context,
+        words: 13, // all three paragraphs, the one without an annotation too
+      }),
+    ]);
+    expect(items.filter((item) => item.kind === "visible")).toHaveLength(3);
   });
 });
