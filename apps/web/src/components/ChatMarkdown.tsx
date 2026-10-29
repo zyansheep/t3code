@@ -10,6 +10,7 @@ import { isHostPath, resolveWorkspaceFilePath } from "@t3tools/shared/path";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import {
   type AnnotationInteraction,
+  type AnnotationReading,
   AuthFilesystemReadScope,
   AuthOrchestrationOperateScope,
   SOURCE_CONTROL_MEDIA_ASSET,
@@ -78,6 +79,8 @@ import React, {
   type MouseEvent as ReactMouseEvent,
   use,
   memo,
+  useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useRef,
   useState,
@@ -165,6 +168,7 @@ import {
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
 import { reportAnnotationInteractions } from "../state/annotationInteractions";
+import { describeAnnotations, registerReadingMessage } from "../lib/annotationReading";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { projectEnvironment } from "../state/projects";
 import { filesystemEnvironment } from "../state/filesystem";
@@ -935,9 +939,6 @@ const MarkdownAbbreviationContext = React.createContext<ReturnType<
   typeof PopoverCreateHandle<string>
 > | null>(null);
 const ABBREVIATION_HOVER_DELAY_MS = 300;
-const ABBREVIATION_SELECTOR = "abbr[data-markdown-abbreviation]";
-const ANNOTATION_TEXT_MAX_LENGTH = 40;
-const ANNOTATION_MAX_COUNT = 200;
 // One renderer session (its start time), so a reader's later visits to the same message stay apart.
 const ANNOTATION_VIEW = `v${Math.round(performance.timeOrigin).toString(36)}`;
 
@@ -957,29 +958,23 @@ function abbreviationInteraction(
   now: number,
   text: string,
 ): AnnotationInteraction | null {
-  const triggers = [...container.querySelectorAll(ABBREVIATION_SELECTOR)]
-    .map((trigger) => ({ trigger, text: trigger.textContent?.trim() ?? "" }))
-    .filter((entry) => entry.text.length > 0 && entry.text.length <= ANNOTATION_TEXT_MAX_LENGTH)
-    .slice(0, ANNOTATION_MAX_COUNT);
+  const { triggers, place } = describeAnnotations(container);
   const position = triggers.findIndex((entry) => entry.trigger === opened.trigger);
   const word = triggers[position]?.text;
   if (word === undefined) return null;
-  const box = container.getBoundingClientRect();
   return {
     kind: opened.kind,
     word,
     at: opened.at,
     dwellMs: Math.max(0, now - opened.at),
     view: ANNOTATION_VIEW,
-    context: `m${fnv1a32(text).toString(36)}`,
+    context: annotationContext(text),
     position,
-    box: [box.left, box.top, box.width, box.height],
-    annotations: triggers.map(({ trigger, text: entryText }) => {
-      const rect = trigger.getBoundingClientRect();
-      return [entryText, rect.left - box.left, rect.top - box.top] as const;
-    }),
+    ...place,
   };
 }
+
+const annotationContext = (text: string) => `m${fnv1a32(text).toString(36)}`;
 
 function markdownHeadingRenderer(level: 1 | 2 | 3 | 4 | 5 | 6) {
   const Tag = `h${level}` as const;
@@ -1743,6 +1738,22 @@ function ChatMarkdown({
   });
   const openAbbreviation = useRef<OpenAbbreviation | null>(null);
   const environmentId = props.environmentId;
+  // Clicks, selections, mouse paths and paragraph stays on screen in a finished message with annotations.
+  const reportReading = useEffectEvent((items: ReadonlyArray<AnnotationReading>) => {
+    if (environmentId) void reportAnnotations({ environmentId, input: { items: [...items] } });
+  });
+  const isStreaming = componentState.isStreaming;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the rendered message's DOM with the shared reading listeners until it unmounts or changes
+  useEffect(() => {
+    const container = markdownRef.current;
+    if (!hasAbbreviations || !environmentId || isStreaming || !container) return;
+    return registerReadingMessage({
+      container,
+      view: ANNOTATION_VIEW,
+      context: annotationContext(text),
+      report: (items) => reportReading(items),
+    });
+  }, [hasAbbreviations, environmentId, isStreaming, markdownRef, text]);
   const finishAbbreviation = () => {
     const opened = openAbbreviation.current;
     openAbbreviation.current = null;
