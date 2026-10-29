@@ -38,10 +38,10 @@ const AnnotationOpen = Schema.Struct({
 });
 
 /**
- * Where the reader was in a message with annotations, by position only: a click (`target`: a link or control, or
- * text), a text selection (its box, length and the annotations it covered, by index), one stay of a paragraph on
- * screen (its band in the message; `ms` the time a reader could have been reading it, `wall` all of it, and `away`,
- * `media` and `idle` the rest by why it doesn't count), or a mouse path (`[ms since at, x, y]` points).
+ * Where the reader was in a message with annotations, by position only: a click (`target`: link or control, or text), a
+ * selection (box, length, covered annotations by index), a paragraph's stay on screen (`ms` readable time, `wall` all of
+ * it, `away`/`media`/`idle` the rest), or a mouse path (`[ms since at, x, y]`). `words` counts Latin-script words outside
+ * code plus one per annotation that is a word (one of only punctuation translates a sentence).
  */
 const AnnotationClick = Schema.Struct({
   ...AnnotationPlace,
@@ -66,6 +66,7 @@ const AnnotationVisible = Schema.Struct({
   kind: Schema.Literal("visible"),
   y: Schema.Finite,
   height: Duration,
+  words: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   ms: Duration,
   wall: Duration,
   away: Duration,
@@ -81,12 +82,20 @@ const AnnotationTrace = Schema.Struct({
   ),
 });
 
+/** A message's first time on screen in its view, sent once with its `words`, which opens are counted against. */
+const AnnotationShown = Schema.Struct({
+  ...AnnotationPlace,
+  kind: Schema.Literal("shown"),
+  words: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 10_000 })),
+});
+
 export const AnnotationInteraction = Schema.Union([
   AnnotationOpen,
   AnnotationClick,
   AnnotationSelect,
   AnnotationVisible,
   AnnotationTrace,
+  AnnotationShown,
 ]);
 export type AnnotationInteraction = typeof AnnotationInteraction.Type;
 export type AnnotationReading = Exclude<AnnotationInteraction, typeof AnnotationOpen.Type>;
