@@ -103,6 +103,7 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import {
+  FetchHttpClient,
   HttpRouter,
   HttpServerRequest,
   HttpServerRespondable,
@@ -113,6 +114,7 @@ import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as ServerConfig from "./config.ts";
+import { forwardAnnotationInteractions } from "./annotationInteractions.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -2728,6 +2730,8 @@ export const layerWsRpc = (
               ),
             ),
           ),
+        [WS_METHODS.serverReportAnnotationInteractions]: (input) =>
+          forwardAnnotationInteractions(input).pipe(Effect.provide(FetchHttpClient.layer)),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) => relayClient.resolve,
         [WS_METHODS.cloudInstallRelayClient]: (_input) =>
           Stream.callback<RelayClientInstallProgressEvent, RelayClientInstallFailedError>((queue) =>
