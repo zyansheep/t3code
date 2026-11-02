@@ -1,0 +1,156 @@
+import { AnnotationInteractionsReportInput, AnnotationOpen } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import { describe, expect, it } from "vite-plus/test";
+
+import { createGlossOpenQueue, fnv1a32, glossOpenItem, type QueuedGlossOpen } from "./glossOpens";
+
+const NOW = 1_800_000_000_000;
+const isItem = Schema.is(AnnotationOpen);
+const decodeReport = Schema.decodeUnknownSync(AnnotationInteractionsReportInput);
+
+const open = (sequence: number, word = "mondai", at = NOW) =>
+  glossOpenItem({ session: "s1", sequence, messageText: "raw text", word, at })!;
+
+const entry = (sequence: number, environmentId = "e1", at = NOW): QueuedGlossOpen => ({
+  environmentId,
+  item: open(sequence, "mondai", at),
+});
+
+function harness(options: {
+  stored?: unknown;
+  send?: (
+    environmentId: string,
+    items: ReadonlyArray<AnnotationOpen>,
+  ) => boolean | Promise<boolean>;
+}) {
+  const sent: Array<{ environmentId: string; uids: Array<string | undefined> }> = [];
+  const saves: Array<ReadonlyArray<QueuedGlossOpen>> = [];
+  const queue = createGlossOpenQueue({
+    load: async () => options.stored ?? [],
+    save: async (entries) => {
+      saves.push(entries);
+    },
+    send: async (environmentId, items) => {
+      sent.push({ environmentId, uids: items.map((item) => item.uid) });
+      return (await options.send?.(environmentId, items)) ?? true;
+    },
+    isItem,
+    now: () => NOW,
+  });
+  return { queue, sent, saves };
+}
+
+describe("glossOpenItem", () => {
+  it("claims the opened word and nothing else", () => {
+    const item = open(7);
+    expect(item).toEqual({
+      kind: "pin",
+      word: "mondai",
+      at: NOW,
+      dwellMs: 0,
+      view: `phone-s1-${fnv1a32("mondai").toString(36)}`,
+      context: `m${fnv1a32("raw text").toString(36)}`,
+      position: 0,
+      box: [0, 0, 0, 0],
+      annotations: [["mondai", 0, 0]],
+      uid: "phone-s1-7",
+    });
+    expect(item).not.toHaveProperty("words");
+    expect(decodeReport({ items: [item] })).toEqual({
+      items: [item],
+    });
+  });
+
+  it("gives two words of one message separate views, so neither reads as left unopened", () => {
+    const [a, b] = [open(1, "mondai"), open(2, "moshi")];
+    expect(a.context).toBe(b.context);
+    expect(a.view).not.toBe(b.view);
+    expect(open(3, "mondai").view).toBe(a.view);
+  });
+
+  it("hashes as the desktop does", () => {
+    expect(fnv1a32("")).toBe(0x811c9dc5);
+    expect(fnv1a32("a")).toBe(0xe40c292c);
+  });
+
+  it("skips words the collector would reject", () => {
+    expect(glossOpenItem({ session: "s", sequence: 1, messageText: "", word: " ", at: NOW })).toBe(
+      null,
+    );
+    expect(
+      glossOpenItem({ session: "s", sequence: 1, messageText: "", word: "x".repeat(41), at: NOW }),
+    ).toBe(null);
+  });
+});
+
+describe("createGlossOpenQueue", () => {
+  it("sends in order, in batches of at most 50, and forgets what was taken", async () => {
+    const { queue, sent, saves } = harness({});
+    for (let i = 1; i <= 60; i += 1) await queue.add(entry(i));
+    await queue.flush();
+    expect(sent.map((call) => call.uids.length)).toEqual([50, 10]);
+    expect(sent[0]!.uids[0]).toBe("phone-s1-1");
+    expect(queue.pending()).toEqual([]);
+    expect(saves.at(-1)).toEqual([]);
+  });
+
+  it("keeps a failed batch for the next flush, with the same uid", async () => {
+    let online = false;
+    const { queue, sent } = harness({ send: () => online });
+    await queue.add(entry(1));
+    await queue.flush();
+    expect(queue.pending()).toHaveLength(1);
+    online = true;
+    await queue.flush();
+    expect(queue.pending()).toEqual([]);
+    expect(sent.map((call) => call.uids)).toEqual([["phone-s1-1"], ["phone-s1-1"]]);
+  });
+
+  it("never rejects when sending or saving throws", async () => {
+    const queue = createGlossOpenQueue({
+      load: async () => {
+        throw new Error("unreadable");
+      },
+      save: async () => {
+        throw new Error("disk full");
+      },
+      send: async () => {
+        throw new Error("offline");
+      },
+      isItem,
+      now: () => NOW,
+    });
+    await expect(queue.add(entry(1))).resolves.toBeUndefined();
+    await expect(queue.flush()).resolves.toBeUndefined();
+    expect(queue.pending()).toHaveLength(1);
+  });
+
+  it("lets one server's failure hold back only its own reports", async () => {
+    const { queue } = harness({ send: (environmentId) => environmentId === "up" });
+    await queue.add(entry(1, "down"));
+    await queue.add(entry(2, "up"));
+    await queue.flush();
+    expect(queue.pending().map((queued) => queued.environmentId)).toEqual(["down"]);
+  });
+
+  it("is bounded in size and age, the oldest going first", async () => {
+    const { queue } = harness({ send: () => false });
+    await queue.add(entry(1, "e1", NOW - 8 * 86_400_000));
+    for (let i = 2; i <= 400; i += 1) await queue.add(entry(i));
+    const pending = queue.pending();
+    expect(pending).toHaveLength(300);
+    expect(pending[0]!.item.uid).toBe("phone-s1-101");
+    expect(pending.at(-1)!.item.uid).toBe("phone-s1-400");
+  });
+
+  it("restores what an earlier run left, before new opens, and ignores junk", async () => {
+    const { queue } = harness({
+      stored: [entry(1), { environmentId: "e1", item: { kind: "visible" } }, 3, null],
+    });
+    await queue.add(entry(2));
+    expect(queue.pending().map((queued) => queued.item.uid)).toEqual(["phone-s1-1", "phone-s1-2"]);
+    const junk = harness({ stored: { not: "a list" } });
+    await junk.queue.flush();
+    expect(junk.sent).toEqual([]);
+  });
+});
