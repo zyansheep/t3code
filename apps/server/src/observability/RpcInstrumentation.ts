@@ -55,6 +55,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverUpdateServerWithProgress]: "server",
   [WS_METHODS.serverCommitDesktopUpdate]: "server",
   [WS_METHODS.serverReportAnnotationInteractions]: "server",
+  [WS_METHODS.serverNextAnnotationReview]: "server",
   [WS_METHODS.serverUpsertKeybinding]: "server",
   [WS_METHODS.serverRemoveKeybinding]: "server",
   [WS_METHODS.serverRunStorageCleanup]: "server",

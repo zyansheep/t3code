@@ -1,4 +1,4 @@
-import type { AnnotationInteractionsReportInput } from "@t3tools/contracts";
+import { type AnnotationInteractionsReportInput, AnnotationReviewError } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
@@ -25,4 +25,12 @@ export const forwardAnnotationInteractions = Effect.fn("forwardAnnotationInterac
   },
   Effect.timeout("5 seconds"),
   Effect.ignore(),
+);
+
+/**
+ * Review cards are served by the Z3 Code desktop server, which the phone talks to; this server only declares the RPC
+ * (the contract is shared), so a client that asks it gets a short reason instead of a card.
+ */
+export const noAnnotationReview = Effect.fail(
+  new AnnotationReviewError({ detail: "This server has no review cards" }),
 );

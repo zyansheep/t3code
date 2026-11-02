@@ -5,7 +5,12 @@ import {
   OrchestrationV2SearchThreadsInput,
   OrchestrationV2SearchThreadsResult,
 } from "./orchestrationV2.ts";
-import { AnnotationInteractionsReportInput } from "./annotationInteractions.ts";
+import {
+  AnnotationInteractionsReportInput,
+  AnnotationReviewError,
+  AnnotationReviewNextInput,
+  AnnotationReviewNextResult,
+} from "./annotationInteractions.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
   McpAppCallToolInput,
@@ -505,6 +510,7 @@ export const WS_METHODS = {
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
   serverCommitDesktopUpdate: "server.commitDesktopUpdate",
   serverReportAnnotationInteractions: "server.reportAnnotationInteractions",
+  serverNextAnnotationReview: "server.nextAnnotationReview",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
   serverRunStorageCleanup: "server.runStorageCleanup",
@@ -622,6 +628,12 @@ const WsServerReportAnnotationInteractionsRpc = Rpc.make(
     error: EnvironmentAuthorizationError,
   },
 );
+
+const WsServerNextAnnotationReviewRpc = Rpc.make(WS_METHODS.serverNextAnnotationReview, {
+  payload: AnnotationReviewNextInput,
+  success: AnnotationReviewNextResult,
+  error: Schema.Union([AnnotationReviewError, EnvironmentAuthorizationError]),
+});
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
   payload: ServerUpsertKeybindingInput,
@@ -2014,6 +2026,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpdateServerWithProgressRpc,
   WsServerCommitDesktopUpdateRpc,
   WsServerReportAnnotationInteractionsRpc,
+  WsServerNextAnnotationReviewRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
   WsServerRunStorageCleanupRpc,
