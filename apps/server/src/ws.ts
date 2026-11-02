@@ -101,6 +101,7 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import {
+  FetchHttpClient,
   HttpRouter,
   HttpServerRequest,
   HttpServerRespondable,
@@ -108,6 +109,7 @@ import {
 } from "effect/http";
 import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 
+import { forwardAnnotationInteractions } from "./annotationInteractions.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as ServerConfig from "./config.ts";
@@ -2539,6 +2541,8 @@ export const layerWsRpc = (
           ServerSelfUpdate.updateProgressStream(serverSelfUpdate, input),
         [WS_METHODS.serverCommitDesktopUpdate]: (input) =>
           serverSelfUpdate.commitDesktopUpdate(input.requestId),
+        [WS_METHODS.serverReportAnnotationInteractions]: (input) =>
+          forwardAnnotationInteractions(input).pipe(Effect.provide(FetchHttpClient.layer)),
         [WS_METHODS.serverUpsertKeybinding]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (rule) {
