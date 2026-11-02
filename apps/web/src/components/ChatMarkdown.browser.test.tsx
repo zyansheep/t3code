@@ -55,18 +55,22 @@ vi.mock(import("../state/session"), async (original) => {
     readEnvironmentScope: hasScope as never,
   };
 });
-const { annotationReport } = vi.hoisted(() => ({
+const { annotationReport, reviewNext } = vi.hoisted(() => ({
   annotationReport: vi.fn(async (_report: unknown) => ({ _tag: "Success" })),
+  reviewNext: vi.fn(async (_request: unknown): Promise<unknown> => ({ _tag: "Success" })),
 }));
 vi.mock(import("../state/use-atom-command"), async (original) => {
   const actual = await original();
-  const { reportAnnotationInteractions } = await import("../state/annotationInteractions");
+  const { nextAnnotationReview, reportAnnotationInteractions } =
+    await import("../state/annotationInteractions");
   return {
     ...actual,
     useAtomCommand: ((command: unknown, options: unknown) =>
       command === reportAnnotationInteractions
         ? annotationReport
-        : actual.useAtomCommand(command as never, options as never)) as never,
+        : command === nextAnnotationReview
+          ? reviewNext
+          : actual.useAtomCommand(command as never, options as never)) as never,
   };
 });
 // The client's own server, which forwards annotation reports, rather than the one hosting the chat.
@@ -159,6 +163,7 @@ function setup() {
   parsedSources.length = 0;
   settingsOverrides.mathRenderingEnabled = false;
   annotationReport.mockClear();
+  reviewNext.mockReset();
   setPrimaryEnvironment(null);
   renderDiagram.mockReset();
   workspaceSearch.mockReset().mockResolvedValue(AsyncResult.success({ entries: [] }));
@@ -543,4 +548,134 @@ describe("ChatMarkdown abbreviations", () => {
     });
     expect(JSON.stringify(report)).not.toContain("header");
   });
+
+  it("offers a review wedge in the gloss popover of a message with a server", async () => {
+    setup();
+    await using screen = await renderGlossed();
+    await userEvent.click(screen.container.querySelector("abbr")!);
+    await expect.element(page.getByText("Content Security Policy")).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Review a word" })).toBeVisible();
+  });
+
+  it("turns the popover into review cards: Up reveals, Right moves on and reports each card once", async () => {
+    setup();
+    queueCards(MONDAI, KAISHA, null);
+    await using screen = await renderGlossed();
+    await userEvent.click(screen.container.querySelector("abbr")!);
+    await userEvent.click(page.getByRole("button", { name: "Review a word" }));
+
+    await expectCardShown("問題");
+    expect(document.body.textContent).not.toContain("problem");
+    expect(reviewNext).toHaveBeenCalledWith({
+      environmentId: "environment-review",
+      input: { source: "desktop", exclude: [] },
+    });
+    // The next card is asked for while this one is shown, without it.
+    await vi.waitFor(() =>
+      expect(reviewNext).toHaveBeenLastCalledWith({
+        environmentId: "environment-review",
+        input: { source: "desktop", exclude: ["c1"] },
+      }),
+    );
+
+    expect(press("ArrowUp")).toBe(true);
+    await expect.element(page.getByText("problem")).toBeVisible();
+    await expect.element(page.getByText("もんだい")).toBeVisible();
+    expect(reviewItems()).toEqual([]);
+
+    expect(press("ArrowRight")).toBe(true);
+    await expectCardShown("会社");
+    await vi.waitFor(() => expect(reviewItems()).toHaveLength(1));
+    expect(reviewItems()[0]).toMatchObject({
+      kind: "review",
+      card: "c1",
+      word: "問題",
+      revealMs: expect.any(Number),
+      shownMs: expect.any(Number),
+      source: "desktop",
+      uid: expect.any(String),
+    });
+
+    // Moving on without revealing reports no reveal time.
+    expect(press("ArrowRight")).toBe(true);
+    await expect.element(page.getByText("Nothing to review right now")).toBeVisible();
+    await vi.waitFor(() => expect(reviewItems()).toHaveLength(2));
+    expect(reviewItems()[1]).toMatchObject({ card: "c2", word: "会社", revealMs: null });
+    expect(reviewItems()[1]!.uid).not.toBe(reviewItems()[0]!.uid);
+  });
+
+  it("starts a review with Right while a gloss is hovered, and Escape ends it and reports the card", async () => {
+    setup();
+    queueCards(MONDAI, KAISHA);
+    await using screen = await renderGlossed();
+    await userEvent.hover(screen.container.querySelector("abbr")!);
+    expect(press("ArrowRight")).toBe(true);
+    await expectCardShown("問題");
+    await userEvent.click(page.getByText("問題"));
+    await expect.element(page.getByText("problem")).toBeVisible();
+
+    expect(press("Escape")).toBe(true);
+    await vi.waitFor(() => expect(reviewItems()).toHaveLength(1));
+    expect(reviewItems()[0]).toMatchObject({ card: "c1", revealMs: expect.any(Number) });
+    await expect.element(page.getByText("問題")).not.toBeInTheDocument();
+  });
+
+  it("leaves arrow keys alone when no gloss is hovered or open", async () => {
+    setup();
+    queueCards(MONDAI);
+    await using screen = await renderGlossed();
+    // The pointer may still sit where an earlier test hovered.
+    await userEvent.unhover(screen.container.querySelector("abbr")!);
+    expect(press("ArrowRight")).toBe(false);
+    expect(press("ArrowUp")).toBe(false);
+    expect(reviewNext).not.toHaveBeenCalled();
+  });
 });
+
+const MONDAI = { id: "c1", ja: "問題", kana: "もんだい", gloss: "problem" };
+const KAISHA = { id: "c2", ja: "会社", kana: "かいしゃ", gloss: "company" };
+
+/** The collector serves these cards in order, then nothing. */
+function queueCards(...cards: Array<typeof MONDAI | null>) {
+  for (const card of cards) reviewNext.mockResolvedValueOnce({ _tag: "Success", value: { card } });
+  reviewNext.mockResolvedValue({ _tag: "Success", value: { card: null } });
+}
+
+function renderGlossed() {
+  return render(
+    <AppAtomRegistryProvider>
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text='Set a <abbr title="Content Security Policy">CSP</abbr> header.'
+        threadRef={{
+          environmentId: EnvironmentId.make("environment-review"),
+          threadId: ThreadId.make("thread-review"),
+        }}
+      />
+    </AppAtomRegistryProvider>,
+  );
+}
+
+/** Waits for the review card showing `word` to be painted, which starts its timing. */
+async function expectCardShown(word: string) {
+  await expect
+    .element(page.getByRole("button", { name: new RegExp(word) }))
+    .toHaveAttribute("data-shown");
+}
+
+/** Presses `key` where focus is, answering whether something took it. */
+function press(key: string) {
+  const event = new KeyboardEvent("keydown", { key, cancelable: true, bubbles: true });
+  (document.activeElement ?? document.body).dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
+function reviewItems() {
+  return (
+    annotationReport.mock.calls as unknown as Array<
+      [{ input: { items: Array<Record<string, unknown>> } }]
+    >
+  )
+    .flatMap(([report]) => report.input.items)
+    .filter((item) => item.kind === "review");
+}
