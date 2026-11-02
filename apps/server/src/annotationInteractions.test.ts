@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
+import { AnnotationInteractionsReportInput } from "@t3tools/contracts";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import { describe } from "vite-plus/test";
 
@@ -22,8 +24,14 @@ const peek = {
   annotations: [["CSP", 4, 0]],
 } as const;
 
+const decodeReport = Schema.decodeSync(AnnotationInteractionsReportInput);
+
 /** Runs the forwarder against a fake collector that answers every post with `status`. */
-const forwardWith = (env: Record<string, string>, status = 200) => {
+const forwardWith = (
+  env: Record<string, string>,
+  status = 200,
+  input: AnnotationInteractionsReportInput = { items: [peek] },
+) => {
   const requests: Array<{ readonly url: string; readonly body: string }> = [];
   const client = HttpClient.make((request) => {
     requests.push({
@@ -32,7 +40,7 @@ const forwardWith = (env: Record<string, string>, status = 200) => {
     });
     return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status })));
   });
-  const run = forwardAnnotationInteractions({ items: [peek] }).pipe(
+  const run = forwardAnnotationInteractions(input).pipe(
     Effect.provideService(HttpClient.HttpClient, client),
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
   );
@@ -50,6 +58,30 @@ describe("forwardAnnotationInteractions", () => {
       );
       assert.include(requests[0]!.body, '"surface":"t3"');
       assert.include(requests[0]!.body, '"word":"CSP"');
+    }),
+  );
+
+  it.effect("forwards a phone's open whole, keeping its uid for the collector's dedupe", () =>
+    Effect.gen(function* () {
+      const opened = {
+        kind: "pin",
+        word: "mondai",
+        at: 1_800_000_000_000,
+        dwellMs: 0,
+        view: "phone-s1-abc",
+        context: "m1",
+        position: 0,
+        box: [0, 0, 0, 0],
+        annotations: [["mondai", 0, 0]],
+        uid: "phone-s1-1",
+      } as const;
+      const { requests, run } = forwardWith(
+        { T3CODE_ANNOTATION_EVENTS_URL: COLLECTOR },
+        200,
+        decodeReport({ items: [opened] }),
+      );
+      yield* run;
+      assert.deepStrictEqual(JSON.parse(requests[0]!.body), { surface: "t3", items: [opened] });
     }),
   );
 

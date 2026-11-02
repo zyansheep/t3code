@@ -35,6 +35,8 @@ const AnnotationOpen = Schema.Struct({
   word: AnnotationText,
   dwellMs: Duration,
   position: Schema.Int,
+  /** Client id, so a report sent twice (the phone's queue retries) is stored once. */
+  uid: Schema.optional(AnnotationId),
 });
 
 /**
