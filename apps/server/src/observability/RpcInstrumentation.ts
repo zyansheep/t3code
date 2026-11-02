@@ -90,6 +90,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverReportClientActivity]: "server",
   [WS_METHODS.serverReportAnnotationInteractions]: "server",
   [WS_METHODS.serverAdjustAnnotationIntensity]: "server",
+  [WS_METHODS.serverNextAnnotationReview]: "server",
   [WS_METHODS.scheduledTasksSubscribe]: "scheduledTasks",
   [WS_METHODS.scheduledTasksUpsert]: "scheduledTasks",
   [WS_METHODS.scheduledTasksSetEnabled]: "scheduledTasks",
