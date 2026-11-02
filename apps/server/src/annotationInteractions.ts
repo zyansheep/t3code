@@ -3,6 +3,10 @@ import {
   type AnnotationIntensityAdjustInput,
   AnnotationIntensityError,
   type AnnotationInteractionsReportInput,
+  AnnotationReviewCard,
+  AnnotationReviewError,
+  type AnnotationReviewNextInput,
+  type AnnotationReviewNextResult,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
@@ -77,5 +81,49 @@ export const adjustAnnotationIntensity = Effect.fn("adjustAnnotationIntensity")(
     isIntensityError(error)
       ? error
       : new AnnotationIntensityError({ detail: "collector unreachable" }),
+  ),
+);
+
+const isReviewError = Schema.is(AnnotationReviewError);
+const decodeReviewAnswer = Schema.decodeUnknownOption(
+  Schema.Struct({
+    ok: Schema.Boolean,
+    card: Schema.optional(Schema.NullOr(AnnotationReviewCard)),
+    error: Schema.optional(Schema.String),
+  }),
+);
+
+/**
+ * Asks the collector at the origin of `T3CODE_ANNOTATION_EVENTS_URL` for the next word to review, with
+ * `POST /v1/review/next`; `card: null` means nothing is due. Fails with a reason short enough to show on the card:
+ * `not configured`, the collector's own error, its status, or `collector unreachable`.
+ */
+export const nextAnnotationReview = Effect.fn("nextAnnotationReview")(
+  function* (input: AnnotationReviewNextInput) {
+    const configured = (yield* AnnotationEventsUrl).trim();
+    if (configured === "") return yield* new AnnotationReviewError({ detail: "not configured" });
+    const url = yield* Effect.try({
+      try: () => new URL("/v1/review/next", configured).toString(),
+      catch: () => new AnnotationReviewError({ detail: "collector URL is not valid" }),
+    });
+    const client = yield* HttpClient.HttpClient;
+    const request = yield* HttpClientRequest.post(url).pipe(
+      HttpClientRequest.bodyJson({ source: input.source, exclude: input.exclude }),
+    );
+    const response = yield* client.execute(request);
+    const answer = Option.getOrUndefined(
+      Option.flatMap(yield* Effect.option(response.json), decodeReviewAnswer),
+    );
+    if (response.status === 200 && answer?.ok === true && answer.card !== undefined) {
+      return { card: answer.card } satisfies AnnotationReviewNextResult;
+    }
+    const reason = answer?.error?.trim();
+    return yield* new AnnotationReviewError({
+      detail: reason ? reason : `collector answered ${response.status}`,
+    });
+  },
+  Effect.timeout("3 seconds"),
+  Effect.mapError((error) =>
+    isReviewError(error) ? error : new AnnotationReviewError({ detail: "collector unreachable" }),
   ),
 );
