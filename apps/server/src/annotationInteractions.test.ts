@@ -9,6 +9,7 @@ import { describe } from "vite-plus/test";
 import {
   adjustAnnotationIntensity,
   forwardAnnotationInteractions,
+  nextAnnotationReview,
 } from "./annotationInteractions.ts";
 
 const COLLECTOR = "http://collector.test:7853/v1/interactions";
@@ -82,6 +83,28 @@ describe("forwardAnnotationInteractions", () => {
       );
       yield* run;
       assert.deepStrictEqual(JSON.parse(requests[0]!.body), { surface: "t3", items: [opened] });
+    }),
+  );
+
+  it.effect("forwards a review card's timing whole, like any other item", () =>
+    Effect.gen(function* () {
+      const reviewed = {
+        kind: "review",
+        at: 1_800_000_000_000,
+        card: "c42",
+        word: "問題",
+        revealMs: null,
+        shownMs: 2_400,
+        source: "desktop",
+        uid: "review-1",
+      } as const;
+      const { requests, run } = forwardWith(
+        { T3CODE_ANNOTATION_EVENTS_URL: COLLECTOR },
+        200,
+        decodeReport({ items: [reviewed] }),
+      );
+      yield* run;
+      assert.deepStrictEqual(JSON.parse(requests[0]!.body), { surface: "t3", items: [reviewed] });
     }),
   );
 
@@ -191,6 +214,82 @@ describe("adjustAnnotationIntensity", () => {
     Effect.gen(function* () {
       const { run } = adjustWith(configured, null);
       assert.strictEqual((yield* Effect.flip(run)).message, "collector unreachable");
+    }),
+  );
+});
+
+/** Asks a fake collector for the next review card; it answers with `answer`, or fails to connect when `null`. */
+const reviewWith = (
+  env: Record<string, string>,
+  answer: { readonly status: number; readonly body: unknown } | null,
+) => {
+  const requests: Array<{ readonly url: string; readonly body: string }> = [];
+  const client = HttpClient.make((request) => {
+    requests.push({
+      url: request.url,
+      body: request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
+    });
+    return answer === null
+      ? Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request }),
+          }),
+        )
+      : Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(JSON.stringify(answer.body), { status: answer.status }),
+          ),
+        );
+  });
+  const run = nextAnnotationReview({ source: "desktop", exclude: ["c1"] }).pipe(
+    Effect.provideService(HttpClient.HttpClient, client),
+    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+  );
+  return { requests, run };
+};
+
+describe("nextAnnotationReview", () => {
+  it.effect("posts the source and excluded cards to the collector and returns its card", () =>
+    Effect.gen(function* () {
+      const card = { id: "c42", ja: "問題", kana: "もんだい", gloss: "problem" };
+      const { requests, run } = reviewWith(configured, { status: 200, body: { ok: true, card } });
+      assert.deepStrictEqual(yield* run, { card });
+      assert.deepStrictEqual(requests, [
+        {
+          url: "http://collector.test:7853/v1/review/next",
+          body: JSON.stringify({ source: "desktop", exclude: ["c1"] }),
+        },
+      ]);
+    }),
+  );
+
+  it.effect("returns no card when the collector has nothing to review", () =>
+    Effect.gen(function* () {
+      const { run } = reviewWith(configured, { status: 200, body: { ok: true, card: null } });
+      assert.deepStrictEqual(yield* run, { card: null });
+    }),
+  );
+
+  it.effect("fails as not configured without a collector, sending nothing", () =>
+    Effect.gen(function* () {
+      const { requests, run } = reviewWith({}, { status: 200, body: { ok: true, card: null } });
+      assert.strictEqual((yield* Effect.flip(run)).message, "not configured");
+      assert.strictEqual(requests.length, 0);
+    }),
+  );
+
+  it.effect("fails with the collector's error, its status, or as unreachable", () =>
+    Effect.gen(function* () {
+      const refused = reviewWith(configured, {
+        status: 400,
+        body: { ok: false, error: "no words yet" },
+      });
+      assert.strictEqual((yield* Effect.flip(refused.run)).message, "no words yet");
+      const broken = reviewWith(configured, { status: 502, body: "Bad Gateway" });
+      assert.strictEqual((yield* Effect.flip(broken.run)).message, "collector answered 502");
+      const down = reviewWith(configured, null);
+      assert.strictEqual((yield* Effect.flip(down.run)).message, "collector unreachable");
     }),
   );
 });
