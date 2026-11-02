@@ -87,6 +87,9 @@ import {
   AnnotationIntensityAdjustInput,
   AnnotationIntensityError,
   AnnotationInteractionsReportInput,
+  AnnotationReviewError,
+  AnnotationReviewNextInput,
+  AnnotationReviewNextResult,
 } from "./annotationInteractions.ts";
 import {
   FilesystemGetMetadataInput,
@@ -542,6 +545,7 @@ export const WS_METHODS = {
   serverReportClientActivity: "server.reportClientActivity",
   serverReportAnnotationInteractions: "server.reportAnnotationInteractions",
   serverAdjustAnnotationIntensity: "server.adjustAnnotationIntensity",
+  serverNextAnnotationReview: "server.nextAnnotationReview",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
@@ -1012,6 +1016,12 @@ const WsServerAdjustAnnotationIntensityRpc = Rpc.make(WS_METHODS.serverAdjustAnn
   payload: AnnotationIntensityAdjustInput,
   success: AnnotationIntensity,
   error: Schema.Union([AnnotationIntensityError, EnvironmentAuthorizationError]),
+});
+
+const WsServerNextAnnotationReviewRpc = Rpc.make(WS_METHODS.serverNextAnnotationReview, {
+  payload: AnnotationReviewNextInput,
+  success: AnnotationReviewNextResult,
+  error: Schema.Union([AnnotationReviewError, EnvironmentAuthorizationError]),
 });
 
 const PullRequestRpcError = Schema.Union([
@@ -2060,6 +2070,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReportClientActivityRpc,
   WsServerReportAnnotationInteractionsRpc,
   WsServerAdjustAnnotationIntensityRpc,
+  WsServerNextAnnotationReviewRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,
