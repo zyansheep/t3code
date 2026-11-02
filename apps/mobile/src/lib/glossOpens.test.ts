@@ -1,11 +1,11 @@
-import { AnnotationInteractionsReportInput, AnnotationOpen } from "@t3tools/contracts";
+import { AnnotationInteractionsReportInput, AnnotationInteraction } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import { createGlossOpenQueue, fnv1a32, glossOpenItem, type QueuedGlossOpen } from "./glossOpens";
 
 const NOW = 1_800_000_000_000;
-const isItem = Schema.is(AnnotationOpen);
+const isItem = Schema.is(AnnotationInteraction);
 const decodeReport = Schema.decodeUnknownSync(AnnotationInteractionsReportInput);
 
 const open = (sequence: number, word = "mondai", at = NOW) =>
@@ -20,7 +20,7 @@ function harness(options: {
   stored?: unknown;
   send?: (
     environmentId: string,
-    items: ReadonlyArray<AnnotationOpen>,
+    items: ReadonlyArray<AnnotationInteraction>,
   ) => boolean | Promise<boolean>;
 }) {
   const sent: Array<{ environmentId: string; uids: Array<string | undefined> }> = [];
@@ -152,5 +152,23 @@ describe("createGlossOpenQueue", () => {
     const junk = harness({ stored: { not: "a list" } });
     await junk.queue.flush();
     expect(junk.sent).toEqual([]);
+  });
+
+  it("carries review items beside opens, and restores them", async () => {
+    const review = {
+      kind: "review" as const,
+      at: NOW,
+      card: "c1",
+      word: "問題",
+      revealMs: null,
+      shownMs: 900,
+      source: "mobile" as const,
+      uid: "phone-review-s1-1",
+    };
+    const { queue, sent } = harness({ stored: [{ environmentId: "e1", item: review }] });
+    await queue.add(entry(1));
+    await queue.flush();
+    expect(sent).toEqual([{ environmentId: "e1", uids: ["phone-review-s1-1", "phone-s1-1"] }]);
+    expect(decodeReport({ items: [review, open(1)] }).items).toHaveLength(2);
   });
 });
