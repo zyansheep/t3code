@@ -14,6 +14,7 @@ import {
 import {
   GLOSS_LINK_PATTERN,
   glossOf,
+  glossWord,
   hasGlossLinks,
   isGlossHref,
   markdownWithGlosses,
@@ -192,14 +193,20 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     () => markdownWithGlosses(markdown, openGlosses),
     [markdown, openGlosses],
   );
+  const { onGlossOpen } = props;
   const toggleGloss = (url: string) => {
     const gloss = glossOf(url);
     if (!gloss) return;
+    // Decided here, not in the updater: an updater may run twice, and a tap is one report.
+    const opening = !openGlosses.has(gloss.index);
     setOpenGlosses((previous) => {
       const next = new Set(previous);
       if (!next.delete(gloss.index)) next.add(gloss.index);
       return next;
     });
+    if (!opening || !onGlossOpen) return;
+    const word = glossWord(markdown, gloss.index);
+    if (word) onGlossOpen(word);
   };
   const [parsedLinkUrls, setParsedLinkUrls] = useState<ReadonlyArray<string>>([]);
   const onLinksChange = (links: MarkdownLinkOccurrence[]) => {
