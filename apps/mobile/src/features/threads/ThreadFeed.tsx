@@ -1307,8 +1307,17 @@ function ArtifactTemplateCard(props: {
   );
 }
 
+// Loaded on the first tap: reporting is no reason for the feed to load the connection runtime.
+function reportGlossOpen(environmentId: EnvironmentId, messageText: string, word: string) {
+  void import("../../state/gloss-opens")
+    .then((reports) => reports.reportGlossOpen({ environmentId, messageText, word }))
+    .catch(() => undefined);
+}
+
 const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly markdown: string;
+  /** The message's raw text, for its context id; without it, opened glosses are not reported. */
+  readonly glossMessageText?: string | undefined;
   readonly environmentId: EnvironmentId;
   readonly citationSource?: Pick<AssistantCitation, "threadId" | "messageId">;
   readonly onCiteAssistantText?: (citation: AssistantCitation) => void;
@@ -1348,6 +1357,12 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   const threadIcons = useThreadChipIcons(props.environmentId, liveMarkdown);
   const withGallery = useFilePreviewGallery();
   const onImagePress = props.linkHandlers.onImagePress;
+  const { environmentId, glossMessageText } = props;
+  const onGlossOpen = (word: string) => {
+    if (glossMessageText !== undefined) {
+      reportGlossOpen(environmentId, glossMessageText, word);
+    }
+  };
   const linkHandlers: MarkdownLinkHandlers = {
     ...props.linkHandlers,
     ...(onImagePress ? { onImagePress: (href: string) => onImagePress(href, withGallery) } : {}),
@@ -1394,6 +1409,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
         renderImage={props.renderImage}
         skills={props.skills}
         models={models}
+        onGlossOpen={onGlossOpen}
       />
       {quoteChoices.length > 0 && props.onCiteAssistantText ? (
         <Sheet title={gt("Choose quote source")} onClose={() => setQuoteSelection(null)}>
@@ -1436,6 +1452,7 @@ function AssistantMarkdownBlocks(props: {
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
   readonly models: ReturnType<typeof useModelMentions>;
+  readonly onGlossOpen: (word: string) => void;
 }) {
   const m = useMessages();
   const { blocks, definitions } = useMemo(() => {
@@ -1501,6 +1518,7 @@ function AssistantMarkdownBlocks(props: {
           }
           {...props.linkHandlers}
           renderImage={props.renderImage}
+          onGlossOpen={props.onGlossOpen}
         />
       );
     });
@@ -2683,6 +2701,7 @@ function renderFeedEntry(
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent
               markdown={renderedText}
+              glossMessageText={message.role === "assistant" ? message.text : undefined}
               environmentId={props.environmentId}
               citationSource={{ threadId: props.threadId, messageId: message.id }}
               onCiteAssistantText={props.onCiteAssistantText}

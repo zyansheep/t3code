@@ -59,3 +59,29 @@ export function markdownWithGlosses(markdown: string, expanded: ReadonlySet<numb
 export function hasGlossLinks(markdown: string): boolean {
   return markdown.includes(`(<${GLOSS_SCHEME}`);
 }
+
+/**
+ * The word of the numbered gloss link `index` (the numbering of markdownWithGlosses), as a reader sees it: the link's
+ * label without Markdown escapes or emphasis. Null when there is no such link.
+ */
+export function glossWord(markdown: string, index: number): string | null {
+  const match = [...markdown.matchAll(GLOSS_DESTINATION)][index];
+  if (match === undefined) return null;
+  // The label ends where the destination starts; escapeLinkLabel leaves no unescaped "[" inside it.
+  const before = markdown.slice(0, match.index);
+  let start = before.length - 1;
+  while (start >= 0) {
+    if (before[start] === "[") {
+      let backslashes = 0;
+      while (before[start - 1 - backslashes] === "\\") backslashes += 1;
+      if (backslashes % 2 === 0) break;
+    }
+    start -= 1;
+  }
+  if (start < 0) return null;
+  return before
+    .slice(start + 1)
+    .replace(/\\(.)/gs, "$1")
+    .replace(/^[*_~`]+|[*_~`]+$/g, "")
+    .trim();
+}
