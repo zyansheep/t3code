@@ -1,5 +1,5 @@
 import { createEnvironmentRpcCommand, runAtomCommand } from "@t3tools/client-runtime/state/runtime";
-import { AnnotationOpen, type EnvironmentId, WS_METHODS } from "@t3tools/contracts";
+import { AnnotationInteraction, type EnvironmentId, WS_METHODS } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 
@@ -30,7 +30,7 @@ async function queueFile() {
 }
 
 /** False on a failure or a server that is too slow; a late arrival is stored once, by its uid. */
-async function send(environmentId: string, items: ReadonlyArray<AnnotationOpen>) {
+async function send(environmentId: string, items: ReadonlyArray<AnnotationInteraction>) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<false>((resolve) => {
     timer = setTimeout(() => resolve(false), SEND_TIMEOUT_MS);
@@ -56,7 +56,7 @@ const queue = createGlossOpenQueue({
   save: async (entries: ReadonlyArray<QueuedGlossOpen>) =>
     writeFileAtomically(await queueFile(), JSON.stringify(entries)),
   send,
-  isItem: Schema.is(AnnotationOpen),
+  isItem: Schema.is(AnnotationInteraction),
   now: () => Date.now(),
 });
 
@@ -137,5 +137,20 @@ export function reportGlossOpen(input: {
       .catch(() => undefined);
   } catch {
     // The gloss has already opened.
+  }
+}
+
+/** Queues a review card's item (lib/reviewSession.ts) beside the gloss opens. Never throws and never waits. */
+export function reportAnnotationReview(
+  environmentId: EnvironmentId,
+  item: Extract<AnnotationInteraction, { readonly kind: "review" }>,
+): void {
+  try {
+    void queue
+      .add({ environmentId, item })
+      .then(deliverGlossOpens)
+      .catch(() => undefined);
+  } catch {
+    // The review goes on.
   }
 }
