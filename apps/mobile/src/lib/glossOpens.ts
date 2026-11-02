@@ -2,8 +2,9 @@
  * Words tapped open on the phone, and nothing else: it has no line positions or read depth, and the collector reads any
  * listed but unopened word as seen and not looked up. So each word gets its own `phone-` view whose context lists only
  * that word, sent without a word count, which the collector then treats as an opened-only episode, never a message read.
+ * The same queue carries the review cards of the flashcards (lib/reviewSession.ts).
  */
-import type { AnnotationOpen } from "@t3tools/contracts";
+import type { AnnotationInteraction, AnnotationOpen } from "@t3tools/contracts";
 import { ANNOTATION_REPORT_MAX_ITEMS } from "@t3tools/contracts";
 
 const WORD_MAX_LENGTH = 40;
@@ -54,7 +55,7 @@ export function glossOpenItem(input: {
 
 export interface QueuedGlossOpen {
   readonly environmentId: string;
-  readonly item: AnnotationOpen;
+  readonly item: AnnotationInteraction;
 }
 
 export interface GlossOpenQueueOptions {
@@ -62,8 +63,11 @@ export interface GlossOpenQueueOptions {
   readonly load: () => Promise<unknown>;
   readonly save: (entries: ReadonlyArray<QueuedGlossOpen>) => Promise<void>;
   /** Sends one batch to one environment; true once the server has taken it. */
-  readonly send: (environmentId: string, items: ReadonlyArray<AnnotationOpen>) => Promise<boolean>;
-  readonly isItem: (value: unknown) => value is AnnotationOpen;
+  readonly send: (
+    environmentId: string,
+    items: ReadonlyArray<AnnotationInteraction>,
+  ) => Promise<boolean>;
+  readonly isItem: (value: unknown) => value is AnnotationInteraction;
   readonly now: () => number;
 }
 

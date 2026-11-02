@@ -298,6 +298,7 @@ import {
 import { ThreadWorkflowOpening, useWorkflowOpening } from "./thread-workflow-opening";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
+import { openFlashcards } from "../../state/flashcards-open";
 import {
   fileRoutePathSegments,
   isAbsolutePath,
@@ -1315,6 +1316,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
       reportGlossOpen(environmentId, glossMessageText, word);
     }
   };
+  const onReviewOpen = () => openFlashcards(environmentId);
   const linkHandlers: MarkdownLinkHandlers = {
     ...props.linkHandlers,
     ...(onImagePress ? { onImagePress: (href: string) => onImagePress(href, withGallery) } : {}),
@@ -1335,6 +1337,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
       skills={props.skills}
       models={models}
       onGlossOpen={onGlossOpen}
+      onReviewOpen={onReviewOpen}
     />
   );
 });
@@ -1351,6 +1354,7 @@ function AssistantMarkdownBlocks(props: {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
   readonly models: ReturnType<typeof useModelMentions>;
   readonly onGlossOpen: (word: string) => void;
+  readonly onReviewOpen: () => void;
 }) {
   const { blocks, definitions } = useMemo(() => {
     const blocks = splitMarkdownDetails(props.markdown).map((block) =>
@@ -1402,6 +1406,7 @@ function AssistantMarkdownBlocks(props: {
           {...props.linkHandlers}
           renderImage={props.renderImage}
           onGlossOpen={props.onGlossOpen}
+          onReviewOpen={props.onReviewOpen}
         />
       );
     });
