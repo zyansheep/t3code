@@ -1,11 +1,39 @@
 import { describe, expect, it } from "vite-plus/test";
 import { parseMarkdown } from "react-native-enriched-markdown/src/web/parseMarkdown";
 import { markdownForNativeRendering, markdownWithHtml } from "./markdownDocument";
-import { glossHref, glossOf, hasGlossLinks, markdownWithGlosses } from "./markdownGlosses";
+import {
+  glossHref,
+  glossOf,
+  glossWord,
+  hasGlossLinks,
+  markdownWithGlosses,
+} from "./markdownGlosses";
 import { ENRICHED_INLINE_FILE_LINK_REGEX } from "./enrichedLinkPresentation";
 
 const PROBLEM = '<abbr title="もんだい · problem">問題</abbr>';
 const problemHref = glossHref("もんだい · problem")!;
+
+describe("glossWord", () => {
+  const gloss = (word: string, title = "a meaning") => `<abbr title="${title}">${word}</abbr>`;
+
+  it("names the word of a numbered link, in the numbering of markdownWithGlosses", () => {
+    const markdown = markdownWithHtml(
+      `[a link](https://example.com) ${gloss("mondai")} and ${gloss("moshi")}.`,
+    );
+    expect(glossWord(markdown, 0)).toBe("mondai");
+    expect(glossWord(markdown, 1)).toBe("moshi");
+    expect(glossWord(markdown, 2)).toBe(null);
+    const [, numbered] = /\(<(t3-gloss:1\/[^>]*)>\)/.exec(
+      markdownWithGlosses(markdown, new Set()),
+    )!;
+    expect(glossOf(numbered!)?.index).toBe(1);
+  });
+
+  it("drops Markdown escapes and emphasis from the label", () => {
+    expect(glossWord(markdownWithHtml(gloss("a[1]")), 0)).toBe("a[1]");
+    expect(glossWord(markdownWithHtml(gloss("**mondai**")), 0)).toBe("mondai");
+  });
+});
 
 describe("glossed words in native Markdown", () => {
   it("turns each titled abbr into a gloss link", () => {

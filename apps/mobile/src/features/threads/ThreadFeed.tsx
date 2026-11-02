@@ -1131,8 +1131,17 @@ function ArtifactTemplateCard(props: {
   );
 }
 
+// Loaded on the first tap: reporting is no reason for the feed to load the connection runtime.
+function reportGlossOpen(environmentId: EnvironmentId, messageText: string, word: string) {
+  void import("../../state/gloss-opens")
+    .then((reports) => reports.reportGlossOpen({ environmentId, messageText, word }))
+    .catch(() => undefined);
+}
+
 const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly markdown: string;
+  /** The message's raw text, for its context id; without it, opened glosses are not reported. */
+  readonly glossMessageText?: string | undefined;
   readonly environmentId: EnvironmentId;
   readonly markdownStyles: MarkdownStyleSet;
   readonly linkHandlers: MarkdownLinkHandlers;
@@ -1143,6 +1152,12 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   const models = useModelMentions(props.environmentId, props.markdown);
   const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
   const threadIcons = useThreadChipIcons(props.environmentId, liveMarkdown);
+  const { environmentId, glossMessageText } = props;
+  const onGlossOpen = (word: string) => {
+    if (glossMessageText !== undefined) {
+      reportGlossOpen(environmentId, glossMessageText, word);
+    }
+  };
   const linkHandlers: MarkdownLinkHandlers = {
     ...props.linkHandlers,
     linkCustomization: (href) =>
@@ -1158,6 +1173,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
       renderImage={props.renderImage}
       skills={props.skills}
       models={models}
+      onGlossOpen={onGlossOpen}
     />
   );
 });
@@ -1171,6 +1187,7 @@ function AssistantMarkdownBlocks(props: {
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
   readonly models: ReturnType<typeof useModelMentions>;
+  readonly onGlossOpen: (word: string) => void;
 }) {
   const blocks = useMemo(
     () =>
@@ -1214,6 +1231,7 @@ function AssistantMarkdownBlocks(props: {
           textStyle={props.markdownStyles.nativeTextStyle}
           {...props.linkHandlers}
           renderImage={props.renderImage}
+          onGlossOpen={props.onGlossOpen}
         />
       );
     });
@@ -2221,6 +2239,7 @@ function renderFeedEntry(
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent
               markdown={renderedText}
+              glossMessageText={message.role === "assistant" ? message.text : undefined}
               environmentId={props.environmentId}
               markdownStyles={styles}
               linkHandlers={props.markdownLinkHandlers}
