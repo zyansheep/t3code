@@ -84,6 +84,8 @@ import {
 } from "./auth.ts";
 import { ClientActivityReportInput } from "./background.ts";
 import {
+  AnnotationEnglish,
+  AnnotationEnglishSetInput,
   AnnotationIntensity,
   AnnotationIntensityAdjustInput,
   AnnotationIntensityError,
@@ -91,6 +93,7 @@ import {
   AnnotationReviewError,
   AnnotationReviewNextInput,
   AnnotationReviewNextResult,
+  AnnotationStatus,
 } from "./annotationInteractions.ts";
 import {
   FilesystemGetMetadataInput,
@@ -550,6 +553,8 @@ export const WS_METHODS = {
   serverReportAnnotationInteractions: "server.reportAnnotationInteractions",
   serverAdjustAnnotationIntensity: "server.adjustAnnotationIntensity",
   serverNextAnnotationReview: "server.nextAnnotationReview",
+  serverGetAnnotationStatus: "server.getAnnotationStatus",
+  serverSetAnnotationEnglish: "server.setAnnotationEnglish",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
@@ -1035,6 +1040,18 @@ const WsServerNextAnnotationReviewRpc = Rpc.make(WS_METHODS.serverNextAnnotation
   payload: AnnotationReviewNextInput,
   success: AnnotationReviewNextResult,
   error: Schema.Union([AnnotationReviewError, EnvironmentAuthorizationError]),
+});
+
+const WsServerGetAnnotationStatusRpc = Rpc.make(WS_METHODS.serverGetAnnotationStatus, {
+  payload: Schema.Struct({}),
+  success: AnnotationStatus,
+  error: Schema.Union([AnnotationIntensityError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSetAnnotationEnglishRpc = Rpc.make(WS_METHODS.serverSetAnnotationEnglish, {
+  payload: AnnotationEnglishSetInput,
+  success: AnnotationEnglish,
+  error: Schema.Union([AnnotationIntensityError, EnvironmentAuthorizationError]),
 });
 
 const PullRequestRpcError = Schema.Union([
@@ -2110,6 +2127,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReportAnnotationInteractionsRpc,
   WsServerAdjustAnnotationIntensityRpc,
   WsServerNextAnnotationReviewRpc,
+  WsServerGetAnnotationStatusRpc,
+  WsServerSetAnnotationEnglishRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,
