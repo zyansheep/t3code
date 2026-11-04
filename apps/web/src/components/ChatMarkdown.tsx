@@ -175,6 +175,7 @@ import {
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
 import { reportAnnotationInteractions } from "../state/annotationInteractions";
+import { englishOnlyAtom, watchAnnotationStatus } from "../state/annotationStatus";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { describeAnnotations, registerReadingMessage } from "../lib/annotationReading";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
@@ -221,6 +222,7 @@ import { MarkdownExternalLinkContent } from "./chat/MarkdownExternalLink";
 import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 import { canUseMarkdownFileShellActions } from "./chat/MarkdownFileLink.logic";
 import { rehypeChipPunctuation } from "./chat/markdownChipPunctuation";
+import { rehypeEnglishOnly } from "./chat/markdownEnglishOnly";
 import { handleMarkdownFragmentClick, rehypeHeadingIds } from "./chat/markdownFragments";
 import { rehypeTextDirection } from "./chat/markdownTextDirection";
 import { hastHasText, hastPlainTextDeep, plainHastText } from "./chat/markdownHast.logic";
@@ -406,6 +408,15 @@ function normalizeMarkdownLinkHrefKey(href: string): string {
 const CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS = [
   ...CHAT_MARKDOWN_REHYPE_PLUGINS,
   rehypeHeadingIds,
+  rehypeTextDirection,
+  rehypeChipPunctuation,
+] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
+
+// After heading ids, so links to a heading keep working in English.
+const CHAT_MARKDOWN_ENGLISH_REHYPE_PLUGINS = [
+  ...CHAT_MARKDOWN_REHYPE_PLUGINS,
+  rehypeHeadingIds,
+  rehypeEnglishOnly,
   rehypeTextDirection,
   rehypeChipPunctuation,
 ] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
@@ -1917,6 +1928,13 @@ function ChatMarkdown({
     componentState.environmentId === null
       ? null
       : (primaryEnvironmentId ?? componentState.environmentId);
+  // In English only, glosses render as plain English, so nothing in the message is Japanese to report on or review.
+  const englishOnly = useAtomValue(englishOnlyAtom(hasAbbreviations ? environmentId : null));
+  const glossed = hasAbbreviations && !englishOnly;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the collector's English-only state for this message's server loaded
+  useEffect(() => {
+    if (hasAbbreviations && environmentId) watchAnnotationStatus(environmentId);
+  }, [hasAbbreviations, environmentId]);
   // Clicks, selections, mouse paths and paragraph stays on screen in a finished message with annotations.
   const reportReading = useEffectEvent((items: ReadonlyArray<AnnotationReading>) => {
     if (environmentId) void reportAnnotations({ environmentId, input: { items: [...items] } });
@@ -1925,14 +1943,14 @@ function ChatMarkdown({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the rendered message's DOM with the shared reading listeners until it unmounts or changes
   useEffect(() => {
     const container = markdownRef.current;
-    if (!hasAbbreviations || !environmentId || isStreaming || !container) return;
+    if (!glossed || !environmentId || isStreaming || !container) return;
     return registerReadingMessage({
       container,
       view: ANNOTATION_VIEW,
       context: annotationContext(text),
       report: (items) => reportReading(items),
     });
-  }, [hasAbbreviations, environmentId, isStreaming, markdownRef, text]);
+  }, [glossed, environmentId, isStreaming, markdownRef, text]);
   const finishAbbreviation = () => {
     const opened = openAbbreviation.current;
     openAbbreviation.current = null;
@@ -1942,7 +1960,7 @@ function ChatMarkdown({
     if (item) void reportAnnotations({ environmentId, input: { items: [item] } });
   };
   const review = useGlossReview({
-    environmentId: hasAbbreviations ? environmentId : null,
+    environmentId: glossed ? environmentId : null,
     container: markdownRef,
     popover: abbreviationPopover,
     report: (item) => {
@@ -1987,7 +2005,7 @@ function ChatMarkdown({
       onCopy={handleCopy}
     >
       <ChatMarkdownRendererContext value={componentState}>
-        <MarkdownAbbreviationContext value={hasAbbreviations ? abbreviationPopover : null}>
+        <MarkdownAbbreviationContext value={glossed ? abbreviationPopover : null}>
           {blocks.map((source, index) => (
             <MarkdownSource
               // oxlint-disable-next-line react/no-array-index-key -- streamed blocks only change at the end
@@ -1995,9 +2013,11 @@ function ChatMarkdown({
               text={source}
               remarkPlugins={remarkPlugins}
               rehypePlugins={
-                parseRawHtml
-                  ? CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
-                  : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
+                !parseRawHtml
+                  ? CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
+                  : hasAbbreviations && englishOnly
+                    ? CHAT_MARKDOWN_ENGLISH_REHYPE_PLUGINS
+                    : CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
               }
               shared={!uncachedPlugins}
               // Every block before the last is finished, so its parse can be reused.
@@ -2006,7 +2026,7 @@ function ChatMarkdown({
           ))}
         </MarkdownAbbreviationContext>
       </ChatMarkdownRendererContext>
-      {hasAbbreviations ? (
+      {glossed ? (
         <Popover
           handle={abbreviationPopover}
           onOpenChange={(open, details) =>
