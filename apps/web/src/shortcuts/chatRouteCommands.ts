@@ -1,7 +1,7 @@
 import { AuthPreviewOperateScope, type EnvironmentId } from "@t3tools/contracts";
 import type { AnyRouter } from "@tanstack/react-router";
 
-import { adjustAnnotationIntensityWithToast } from "~/components/chat/AnnotationIntensityToast";
+import { toggleEnglishOnlyWithToast } from "~/components/chat/EnglishOnlyToast";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { isPreviewAvailableFor } from "../browser/previewRuntime";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
@@ -103,17 +103,13 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
     });
   };
 
-  const adjustAnnotations =
-    (step: 1 | -1): CommandHandler =>
-    (event) => {
-      claim(event);
-      // This client's own server forwards to the collector; the server hosting the thread may be a stock build.
-      const environmentId =
-        appAtomRegistry.get(primaryEnvironmentIdAtom) ??
-        readRouteThreadRef()?.environmentId ??
-        null;
-      if (!event.repeat) void adjustAnnotationIntensityWithToast(environmentId, step);
-    };
+  const toggleEnglishOnly: CommandHandler = (event) => {
+    claim(event);
+    // This client's own server forwards to the collector; the server hosting the thread may be a stock build.
+    const environmentId =
+      appAtomRegistry.get(primaryEnvironmentIdAtom) ?? readRouteThreadRef()?.environmentId ?? null;
+    if (!event.repeat) void toggleEnglishOnlyWithToast(environmentId);
+  };
 
   const previewCommand =
     (action: PreviewAction): CommandHandler =>
@@ -175,8 +171,7 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
       "preview.zoomIn": previewCommand("zoom-in"),
       "preview.zoomOut": previewCommand("zoom-out"),
       "preview.resetZoom": previewCommand("reset-zoom"),
-      "annotations.heavier": adjustAnnotations(1),
-      "annotations.lighter": adjustAnnotations(-1),
+      "annotations.englishOnly": toggleEnglishOnly,
     },
     {
       when: () =>

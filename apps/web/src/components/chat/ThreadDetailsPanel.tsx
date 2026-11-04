@@ -23,6 +23,7 @@ import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadServersPanel } from "./ThreadServersPanel";
+import { ThreadJapanesePanel } from "./ThreadJapanesePanel";
 import {
   ThreadDetailsContext,
   ThreadDetailsUsage,
@@ -256,6 +257,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   showLineage={visible.lineage}
                   showSideChats={visible.sideChats}
                 />
+              ) : null}
+
+              {density !== "essential" ? (
+                <ThreadJapanesePanel environmentId={props.environmentId} />
               ) : null}
 
               {visible.usage ? <ThreadDetailsUsage {...props.usage} /> : null}

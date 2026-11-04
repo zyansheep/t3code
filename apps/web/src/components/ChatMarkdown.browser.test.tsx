@@ -73,6 +73,26 @@ vi.mock(import("../state/use-atom-command"), async (original) => {
           : actual.useAtomCommand(command as never, options as never)) as never,
   };
 });
+// English only goes through the collector, which answers with what was asked for (with no end, so no timer).
+const { englishSet } = vi.hoisted(() => ({
+  englishSet: vi.fn((request: { input: { on: boolean } }) => ({
+    on: request.input.on,
+    until: 0,
+    at: 0,
+  })),
+}));
+vi.mock(import("../state/annotationInteractions"), async (original) => ({
+  ...(await original()),
+  setAnnotationEnglish: {
+    label: "test:english",
+    run: async (_registry: unknown, request: { input: { on: boolean } }) =>
+      AsyncResult.success(englishSet(request)),
+  } as never,
+}));
+vi.mock(import("../state/annotationStatus"), async (original) => ({
+  ...(await original()),
+  watchAnnotationStatus: () => {},
+}));
 // The client's own server, which forwards annotation reports, rather than the one hosting the chat.
 vi.mock(import("../state/primaryEnvironment"), async () => {
   const { Atom } = await import("effect/reactivity");
@@ -127,6 +147,9 @@ vi.mock(import("../hooks/useSettings"), async (original) => {
 import ChatMarkdown from "./ChatMarkdown";
 import { AppAtomRegistryProvider, appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
+import { annotationStatusAtom } from "../state/annotationStatus";
+import { flush as flushReading, visibleReadingContexts } from "../lib/annotationReading";
+import { installChatRouteCommands } from "../shortcuts/chatRouteCommands";
 
 // Writable under the mock above.
 const setPrimaryEnvironment = (environmentId: EnvironmentId | null) =>
@@ -162,9 +185,15 @@ function setup() {
   appearance.value = "light";
   parsedSources.length = 0;
   settingsOverrides.mathRenderingEnabled = false;
+  // Reports earlier tests left queued go out now, not into this test's.
+  flushReading();
   annotationReport.mockClear();
   reviewNext.mockReset();
+  englishSet.mockClear();
   setPrimaryEnvironment(null);
+  for (const environmentId of [ENGLISH_ENVIRONMENT, ENGLISH_PRIMARY]) {
+    appAtomRegistry.set(annotationStatusAtom(environmentId), null);
+  }
   renderDiagram.mockReset();
   workspaceSearch.mockReset().mockResolvedValue(AsyncResult.success({ entries: [] }));
   filesystemMetadata.mockReset().mockResolvedValue(AsyncResult.success({ entries: [null] }));
@@ -682,3 +711,150 @@ function reviewItems() {
     .flatMap(([report]) => report.input.items)
     .filter((item) => item.kind === "review");
 }
+
+const ENGLISH_ENVIRONMENT = EnvironmentId.make("environment-english");
+const ENGLISH_PRIMARY = EnvironmentId.make("environment-english-local");
+
+function setEnglishOnly(environmentId: EnvironmentId, on: boolean) {
+  appAtomRegistry.set(annotationStatusAtom(environmentId), {
+    intensity: { level: 0, until: 0 },
+    english: { on, until: 0, at: 0 },
+  });
+}
+
+function renderMessages(...texts: string[]) {
+  return render(
+    <AppAtomRegistryProvider>
+      {texts.map((text) => (
+        <ChatMarkdown
+          key={text}
+          cwd="/tmp/project"
+          text={text}
+          threadRef={{ environmentId: ENGLISH_ENVIRONMENT, threadId: ThreadId.make("thread-en") }}
+        />
+      ))}
+    </AppAtomRegistryProvider>,
+  );
+}
+
+const blockTexts = (container: HTMLElement) =>
+  [...container.querySelectorAll("p, li, pre")].map((block) => block.textContent?.trim());
+
+const MIXED =
+  'The <abbr title="もんだい · problem / issue">問題</abbr> is small. <abbr title="きょう · today">今日</abbr>は<abbr title="あめ · rain">雨</abbr>です<abbr title="It is raining today.">。</abbr> We stay in <abbr title="いま · now">今</abbr>.';
+
+describe("ChatMarkdown English only", () => {
+  it("shows meanings for glossed words and translations for glossed sentences, then Japanese again", async () => {
+    setup();
+    setEnglishOnly(ENGLISH_ENVIRONMENT, true);
+    await using screen = await renderMessages(
+      [
+        MIXED,
+        // Runs back to the previous sentence mark, and keeps translations apart.
+        '<abbr title="あめ · rain">雨</abbr>です<abbr title="It is rain.">。</abbr><abbr title="ほんとう · really">本当</abbr>に<abbr title="Really?">？</abbr>',
+        // Runs back to the start of a list item.
+        '- <abbr title="もう · already">もう</abbr>、<abbr title="おわり · end">終わり</abbr>です<abbr title="It is already over.">。</abbr>',
+        // Never runs back across code, and leaves code as written.
+        'Run `npm test` <abbr title="いま · now">今</abbr>, then `git push` <abbr title="もう · already">もう</abbr>した<abbr title="Already pushed.">！</abbr>',
+        '```html\n<abbr title="もんだい · problem">問題</abbr>\n```',
+        // Abbreviations that aren't Japanese stay.
+        'Set a <abbr title="Content Security Policy">CSP</abbr> header <abbr title="いま · now">今</abbr>.',
+      ].join("\n\n"),
+    );
+    await vi.waitFor(() =>
+      expect(blockTexts(screen.container)).toEqual([
+        "The problem is small. It is raining today. We stay in now.",
+        "It is rain. Really?",
+        "It is already over.",
+        "Run npm test now, then git push Already pushed.",
+        '<abbr title="もんだい · problem">問題</abbr>',
+        "Set a CSP header now.",
+      ]),
+    );
+    expect([...screen.container.querySelectorAll("abbr")].map((abbr) => abbr.textContent)).toEqual([
+      "CSP",
+    ]);
+    expect(screen.container.querySelector("code")?.textContent).toBe("npm test");
+
+    await act(() => setEnglishOnly(ENGLISH_ENVIRONMENT, false));
+    await vi.waitFor(() =>
+      expect(blockTexts(screen.container)[0]).toBe(
+        "The 問題 is small. 今日は雨です。 We stay in 今.",
+      ),
+    );
+    expect(screen.container.querySelectorAll("abbr[data-markdown-abbreviation]")).toHaveLength(17);
+  });
+
+  it("reports no reading and offers no gloss or review wedge while it is on", async () => {
+    setup();
+    setEnglishOnly(ENGLISH_ENVIRONMENT, true);
+    await using screen = await renderMessages(MIXED);
+    const paragraph = screen.container.querySelector("p")!;
+    await vi.waitFor(() => expect(paragraph.querySelector("[data-english]")).not.toBeNull());
+    await userEvent.click(page.getByText("problem", { exact: false }));
+    paragraph.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+    flushReading();
+    expect(annotationReport).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("Review a word");
+
+    // The same click, once Japanese is back, is reported.
+    await act(() => setEnglishOnly(ENGLISH_ENVIRONMENT, false));
+    await vi.waitFor(() => expect(paragraph.querySelector("abbr")).not.toBeNull());
+    await vi.waitFor(() => expect(visibleReadingContexts()).toHaveLength(1));
+    paragraph.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+    flushReading();
+    expect(annotationReport).toHaveBeenCalled();
+    await userEvent.click(paragraph.querySelector("abbr")!);
+    await expect.element(page.getByRole("button", { name: "Review a word" })).toBeVisible();
+  });
+
+  it("toggles from the shortcut, sending the messages on screen when it turns on", async () => {
+    setup();
+    setPrimaryEnvironment(ENGLISH_PRIMARY);
+    using stack = new DisposableStack();
+    const state = {
+      matches: [
+        { routeId: "__root__", pathname: "/", params: {} },
+        { routeId: "/_chat", pathname: "/", params: {} },
+      ],
+    };
+    stack.defer(installChatRouteCommands({ state } as never));
+    await using screen = await renderMessages(MIXED, 'One <abbr title="いま · now">今</abbr>.');
+    await vi.waitFor(() => expect(visibleReadingContexts()).toHaveLength(2));
+    const onScreen = visibleReadingContexts();
+
+    const pressShortcut = () =>
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "E",
+          code: "KeyE",
+          altKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    pressShortcut();
+    await vi.waitFor(() =>
+      expect(englishSet).toHaveBeenCalledWith({
+        environmentId: ENGLISH_PRIMARY,
+        input: { on: true, contexts: onScreen },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(blockTexts(screen.container)).toEqual([
+        "The problem is small. It is raining today. We stay in now.",
+        "One now.",
+      ]),
+    );
+
+    pressShortcut();
+    await vi.waitFor(() =>
+      expect(englishSet).toHaveBeenLastCalledWith({
+        environmentId: ENGLISH_PRIMARY,
+        input: { on: false, contexts: [] },
+      }),
+    );
+    await vi.waitFor(() => expect(blockTexts(screen.container)[1]).toBe("One 今."));
+  });
+});

@@ -51,6 +51,7 @@ import { appAtomRegistry } from "./rpc/atomRegistry";
 import { primaryServerConfigAtom } from "./state/server";
 import { environmentShell } from "./state/shell";
 import { installChatRouteCommands } from "./shortcuts/chatRouteCommands";
+import { startAnnotationStatusRefresh } from "./state/annotationStatus";
 import { startWorkspaceFocus } from "./lib/workspaceFocus";
 import { installCommandPaletteCommands } from "./shortcuts/commandPaletteCommands";
 import { registerOpenFavoriteEditorCommand } from "./components/chat/OpenInPickerShortcut";
@@ -191,6 +192,7 @@ export function startAppServices(): AppRouter {
   startPreviewTitleRecording();
   startBrowserProfileReporting();
   installChatRouteCommands(router);
+  startAnnotationStatusRefresh();
   installCommandPaletteCommands(router);
   registerOpenFavoriteEditorCommand();
   startThreadOverlayRetention(router);
