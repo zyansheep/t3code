@@ -143,6 +143,33 @@ export const AnnotationIntensity = Schema.Struct({
 });
 export type AnnotationIntensity = typeof AnnotationIntensity.Type;
 
+/** Chat in English only, no Japanese, for a while: whether it is on, when it ends and when it was set (epoch ms, `0` if never). */
+export const AnnotationEnglish = Schema.Struct({
+  on: Schema.Boolean,
+  until: Schema.Finite,
+  at: Schema.Finite,
+});
+export type AnnotationEnglish = typeof AnnotationEnglish.Type;
+
+/** The collector's chat level and English-only state, as the client shows and renders them. */
+export const AnnotationStatus = Schema.Struct({
+  intensity: AnnotationIntensity,
+  english: AnnotationEnglish,
+});
+export type AnnotationStatus = typeof AnnotationStatus.Type;
+
+/**
+ * Turns English only on or off. `contexts` are the messages on screen when it is turned on, by the `view` and `context`
+ * their annotation reports carry, so the collector knows whose Japanese the reader swapped for English; empty when off.
+ */
+export const AnnotationEnglishSetInput = Schema.Struct({
+  on: Schema.Boolean,
+  contexts: Schema.Array(Schema.Struct({ view: AnnotationId, context: AnnotationId })).check(
+    Schema.isMaxLength(30),
+  ),
+});
+export type AnnotationEnglishSetInput = typeof AnnotationEnglishSetInput.Type;
+
 export class AnnotationIntensityError extends Schema.TaggedError<AnnotationIntensityError>()(
   "AnnotationIntensityError",
   { detail: Schema.String },

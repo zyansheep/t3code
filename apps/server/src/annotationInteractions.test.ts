@@ -9,7 +9,9 @@ import { describe } from "vite-plus/test";
 import {
   adjustAnnotationIntensity,
   forwardAnnotationInteractions,
+  getAnnotationStatus,
   nextAnnotationReview,
+  setAnnotationEnglish,
 } from "./annotationInteractions.ts";
 
 const COLLECTOR = "http://collector.test:7853/v1/interactions";
@@ -291,5 +293,138 @@ describe("nextAnnotationReview", () => {
       const down = reviewWith(configured, null);
       assert.strictEqual((yield* Effect.flip(down.run)).message, "collector unreachable");
     }),
+  );
+});
+
+/** Runs `effect` against a fake collector that answers with `answer`, or fails to connect when `null`. */
+const collectorWith = <A, E>(
+  effect: Effect.Effect<A, E, HttpClient.HttpClient>,
+  env: Record<string, string>,
+  answer: { readonly status: number; readonly body: unknown } | null,
+) => {
+  const requests: Array<{ readonly method: string; readonly url: string; readonly body: string }> =
+    [];
+  const client = HttpClient.make((request) => {
+    requests.push({
+      method: request.method,
+      url: request.url,
+      body: request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
+    });
+    return answer === null
+      ? Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request }),
+          }),
+        )
+      : Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(JSON.stringify(answer.body), { status: answer.status }),
+          ),
+        );
+  });
+  const run = effect.pipe(
+    Effect.provideService(HttpClient.HttpClient, client),
+    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+  );
+  return { requests, run };
+};
+
+describe("getAnnotationStatus", () => {
+  const intensity = { level: 1, until: 1_800_000_600_000, at: 1_800_000_000_000 };
+
+  it.effect("reads the chat level and English only from the collector's intensity endpoint", () =>
+    Effect.gen(function* () {
+      const english = { on: true, until: 1_800_003_600_000, at: 1_800_000_000_000 };
+      const { requests, run } = collectorWith(getAnnotationStatus(), configured, {
+        status: 200,
+        body: { ok: true, intensity, english },
+      });
+      assert.deepStrictEqual(yield* run, {
+        intensity: { level: 1, until: 1_800_000_600_000 },
+        english,
+      });
+      assert.deepStrictEqual(requests, [
+        { method: "GET", url: "http://collector.test:7853/v1/intensity?surface=chat", body: "" },
+      ]);
+    }),
+  );
+
+  it.effect("reads English only as off from a collector that predates it", () =>
+    Effect.gen(function* () {
+      const { run } = collectorWith(getAnnotationStatus(), configured, {
+        status: 200,
+        body: { ok: true, intensity },
+      });
+      assert.deepStrictEqual((yield* run).english, { on: false, until: 0, at: 0 });
+    }),
+  );
+
+  it.effect(
+    "fails as not configured, with the collector's error, its status, or as unreachable",
+    () =>
+      Effect.gen(function* () {
+        const off = collectorWith(getAnnotationStatus(), {}, { status: 200, body: { ok: true } });
+        assert.strictEqual((yield* Effect.flip(off.run)).message, "not configured");
+        assert.strictEqual(off.requests.length, 0);
+        const refused = collectorWith(getAnnotationStatus(), configured, {
+          status: 400,
+          body: { ok: false, error: "unknown surface" },
+        });
+        assert.strictEqual((yield* Effect.flip(refused.run)).message, "unknown surface");
+        const broken = collectorWith(getAnnotationStatus(), configured, {
+          status: 502,
+          body: "Bad Gateway",
+        });
+        assert.strictEqual((yield* Effect.flip(broken.run)).message, "collector answered 502");
+        const down = collectorWith(getAnnotationStatus(), configured, null);
+        assert.strictEqual((yield* Effect.flip(down.run)).message, "collector unreachable");
+      }),
+  );
+});
+
+describe("setAnnotationEnglish", () => {
+  const contexts = [
+    { view: "v1", context: "m1" },
+    { view: "v1", context: "m2" },
+  ];
+
+  it.effect("posts the switch and the messages on screen, and returns the new state", () =>
+    Effect.gen(function* () {
+      const english = { on: true, until: 1_800_003_600_000, at: 1_800_000_000_000 };
+      const { requests, run } = collectorWith(
+        setAnnotationEnglish({ on: true, contexts }),
+        configured,
+        { status: 200, body: { ok: true, english } },
+      );
+      assert.deepStrictEqual(yield* run, english);
+      assert.deepStrictEqual(requests, [
+        {
+          method: "POST",
+          url: "http://collector.test:7853/v1/english",
+          body: JSON.stringify({ on: true, source: "t3", contexts }),
+        },
+      ]);
+    }),
+  );
+
+  it.effect(
+    "fails as not configured, with the collector's error, its status, or as unreachable",
+    () =>
+      Effect.gen(function* () {
+        const off = setAnnotationEnglish({ on: false, contexts: [] });
+        const unset = collectorWith(off, {}, { status: 200, body: { ok: true } });
+        assert.strictEqual((yield* Effect.flip(unset.run)).message, "not configured");
+        assert.strictEqual(unset.requests.length, 0);
+        const refused = collectorWith(off, configured, {
+          status: 400,
+          body: { ok: false, error: "chat surface is paused" },
+        });
+        assert.strictEqual((yield* Effect.flip(refused.run)).message, "chat surface is paused");
+        const empty = collectorWith(off, configured, { status: 200, body: { ok: true } });
+        assert.strictEqual((yield* Effect.flip(empty.run)).message, "collector answered 200");
+        const down = collectorWith(off, configured, null);
+        assert.strictEqual((yield* Effect.flip(down.run)).message, "collector unreachable");
+      }),
   );
 });
