@@ -57,6 +57,8 @@ export interface WordsHastOptions {
   /** `★ Insight ───` blocks render as insight callouts. */
   readonly insights: boolean;
   readonly extensions: MarkdownExtensions;
+  /** Runs on the sanitized tree after heading ids are added, as a rehype plugin there would. */
+  readonly transform?: ((tree: Root) => void) | undefined;
 }
 
 const CODEX_DIRECTIVES = ["codex-file-citation", "codex-followup", "artifact-template"];
@@ -1211,6 +1213,7 @@ export function wordsHast(text: string, options: WordsHastOptions): Root {
   if (extensions.inert) makeInert(hast);
   if (extensions.preview) return flattenPreview(hast, extensions.preview);
   addHeadingIds(hast);
+  options.transform?.(hast);
   addTextDirection(hast as never);
   groupChipPunctuation(hast as never);
   return hast;

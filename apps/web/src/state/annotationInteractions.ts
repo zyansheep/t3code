@@ -10,7 +10,7 @@ export const reportAnnotationInteractions = createEnvironmentRpcCommand(connecti
 });
 
 /**
- * Makes chat annotations heavier or lighter for a while through the collector, answering with its new level. Presses
+ * Makes chat annotations heavier or lighter for a while through the collector, answering with its new level. Steps
  * run one at a time, so a burst of them lands in order and the last answer is the current level.
  */
 export const adjustAnnotationIntensity = createEnvironmentRpcCommand(connectionAtomRuntime, {
@@ -23,4 +23,17 @@ export const adjustAnnotationIntensity = createEnvironmentRpcCommand(connectionA
 export const nextAnnotationReview = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:annotations:review",
   tag: WS_METHODS.serverNextAnnotationReview,
+});
+
+/** The collector's chat level and English-only state, through this client's own server. */
+export const getAnnotationStatus = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:annotations:status",
+  tag: WS_METHODS.serverGetAnnotationStatus,
+});
+
+/** Turns English only on or off; toggles run one at a time, so the last answer is the current state. */
+export const setAnnotationEnglish = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:annotations:english",
+  tag: WS_METHODS.serverSetAnnotationEnglish,
+  concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
 });

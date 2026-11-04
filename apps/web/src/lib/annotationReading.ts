@@ -464,6 +464,21 @@ function listen() {
   }
 }
 
+/** The messages with a paragraph on screen now, by the `view` and `context` their reports carry, at most 30. */
+export function visibleReadingContexts(): Array<{ view: string; context: string }> {
+  const contexts = new Map<string, { view: string; context: string }>();
+  for (const block of inView) {
+    const message = blockOwners.get(block);
+    if (message) {
+      contexts.set(`${message.view} ${message.context}`, {
+        view: message.view,
+        context: message.context,
+      });
+    }
+  }
+  return [...contexts.values()].slice(0, 30);
+}
+
 /**
  * Starts reporting reading signals for one rendered message; the returned function stops it, sending what its
  * paragraphs' stays and mouse path have gathered. Paragraphs are the innermost blocks with an annotation.

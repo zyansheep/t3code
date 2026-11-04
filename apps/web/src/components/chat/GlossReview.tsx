@@ -192,7 +192,7 @@ export function useGlossReview({
     next();
   });
   const onBlur = useEffectEvent(() => end());
-  const onUnmount = useEffectEvent(() => finish());
+  const onUnmount = useEffectEvent(() => end());
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- listens for review keys on the document while this message has glosses to review from
   useEffect(() => {
     if (environmentId === null) return;
@@ -200,16 +200,16 @@ export function useGlossReview({
     document.addEventListener("keydown", listener, true);
     return () => document.removeEventListener("keydown", listener, true);
   }, [environmentId]);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- ends the review when the window loses focus, and reports the card on screen when the message unmounts
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- ends the review when the window loses focus, and reports the card on screen when the message unmounts or its glosses go (English only)
   useEffect(() => {
-    if (!active) return;
+    if (!active || environmentId === null) return;
     const listener = () => onBlur();
     window.addEventListener("blur", listener);
     return () => {
       window.removeEventListener("blur", listener);
       onUnmount();
     };
-  }, [active]);
+  }, [active, environmentId]);
 
   return { view, available: environmentId !== null, next, reveal, end, painted };
 }

@@ -2,15 +2,15 @@ import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { describe, expect, it } from "vite-plus/test";
 
 import { resolveShortcutCommand, type ShortcutEventLike } from "../../keybindings";
-import { annotationIntensityTitle } from "./annotationIntensity";
+import { durationLabel } from "./annotationIntensity";
 
 function press(
   overrides: Partial<ShortcutEventLike>,
   options: { platform?: string; terminalFocus?: boolean } = {},
 ) {
   const event: ShortcutEventLike = {
-    key: ".",
-    code: "Period",
+    key: "E",
+    code: "KeyE",
     metaKey: false,
     ctrlKey: false,
     shiftKey: false,
@@ -23,51 +23,30 @@ function press(
   });
 }
 
-describe("chat Japanese shortcuts", () => {
-  it("map Alt+Shift+Period to heavier and Alt+Shift+Comma to lighter by physical key", () => {
-    // Shift turns the keys into > and < on US layouts, and Option into other symbols on macOS.
-    expect(press({ key: ">", code: "Period", altKey: true, shiftKey: true })).toBe(
-      "annotations.heavier",
+describe("chat English-only shortcut", () => {
+  it("maps Alt+Shift+E to English only by physical key", () => {
+    expect(press({ altKey: true, shiftKey: true })).toBe("annotations.englishOnly");
+    // Option turns E into another character on macOS.
+    expect(press({ key: "´", altKey: true, shiftKey: true }, { platform: "MacIntel" })).toBe(
+      "annotations.englishOnly",
     );
-    expect(press({ key: "<", code: "Comma", altKey: true, shiftKey: true })).toBe(
-      "annotations.lighter",
-    );
-    expect(
-      press({ key: "˘", code: "Period", altKey: true, shiftKey: true }, { platform: "MacIntel" }),
-    ).toBe("annotations.heavier");
-    expect(
-      press({ key: "¯", code: "Comma", altKey: true, shiftKey: true }, { platform: "MacIntel" }),
-    ).toBe("annotations.lighter");
   });
 
-  it("ignore other keys, other modifiers and the focused terminal", () => {
-    expect(press({ key: ">", code: "Period", shiftKey: true })).toBeNull();
-    expect(press({ key: ".", code: "Period", altKey: true })).toBeNull();
-    expect(
-      press({ key: ">", code: "Period", altKey: true, shiftKey: true, ctrlKey: true }),
-    ).toBeNull();
-    expect(press({ key: "?", code: "Slash", altKey: true, shiftKey: true })).toBeNull();
-    expect(
-      press({ key: ">", code: "Period", altKey: true, shiftKey: true }, { terminalFocus: true }),
-    ).toBeNull();
+  it("ignores other modifiers, the focused terminal, and the retired heavier and lighter keys", () => {
+    expect(press({ altKey: true })).toBeNull();
+    expect(press({ altKey: true, shiftKey: true, ctrlKey: true })).toBeNull();
+    expect(press({ altKey: true, shiftKey: true }, { terminalFocus: true })).toBeNull();
+    expect(press({ key: ">", code: "Period", altKey: true, shiftKey: true })).toBeNull();
+    expect(press({ key: "<", code: "Comma", altKey: true, shiftKey: true })).toBeNull();
   });
 });
 
-describe("annotationIntensityTitle", () => {
-  const until = new Date(2026, 9, 18, 21, 40).getTime();
-
-  // ICU may put a narrow no-break space before PM.
-  const title = (level: number, at: number) =>
-    annotationIntensityTitle({ level, until: at }, "en-US").replace(/\s/g, " ");
-
-  it("names the direction, the level and when it ends", () => {
-    expect(title(1, until)).toBe("Chat Japanese: heavier (+1) until 9:40 PM");
-    expect(title(-2, until)).toBe("Chat Japanese: lighter (-2) until 9:40 PM");
-    expect(title(0, 0)).toBe("Chat Japanese: normal");
-  });
-
-  it("names the ends of the scale off and full", () => {
-    expect(title(-3, until)).toBe("Chat Japanese: off until 9:40 PM");
-    expect(title(3, until)).toBe("Chat Japanese: full (+3) until 9:40 PM");
+describe("durationLabel", () => {
+  it("names a time left to the minute", () => {
+    expect(durationLabel(42 * 60_000)).toBe("42 min");
+    expect(durationLabel(20_000)).toBe("1 min");
+    expect(durationLabel(60 * 60_000 - 400)).toBe("1 hour");
+    expect(durationLabel(125 * 60_000)).toBe("2 h 5 min");
+    expect(durationLabel(180 * 60_000)).toBe("3 hours");
   });
 });
