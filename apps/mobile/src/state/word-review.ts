@@ -7,14 +7,17 @@ import { type EnvironmentId, WS_METHODS } from "@t3tools/contracts";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { glossOpenSession } from "../lib/glossOpens";
-import { createReviewSession, reviewFailureDetail, type ReviewFetch } from "../lib/reviewSession";
+import {
+  createCardReleases,
+  createReviewSession,
+  reviewFailureDetail,
+  type ReviewFetch,
+} from "../lib/reviewSession";
 import { appAtomRegistry } from "./atom-registry";
 import { reviewCountsAtom } from "./chat-japanese-view";
 import { reportAnnotationReview } from "./gloss-opens";
 
 const FETCH_TIMEOUT_MS = 15_000;
-/** How long the next card waits for the server to take a grade before it is asked for anyway. */
-const DELIVERY_WAIT_MS = 4_000;
 /** The badge's counts are asked for at most this often outside a review. */
 const COUNTS_REFRESH_MS = 10 * 60_000;
 
@@ -31,6 +34,18 @@ function withTimeout<A>(promise: Promise<A>, ms: number, late: A): Promise<A> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/** Per environment, the cards to release with the next request, the badge's peeks included. */
+const releases = new Map<EnvironmentId, ReturnType<typeof createCardReleases>>();
+
+function releasesOf(environmentId: EnvironmentId) {
+  let list = releases.get(environmentId);
+  if (!list) {
+    list = createCardReleases();
+    releases.set(environmentId, list);
+  }
+  return list;
+}
+
 function fetchNextCard(
   environmentId: EnvironmentId,
   request: {
@@ -39,6 +54,7 @@ function fetchNextCard(
     readonly peek?: boolean;
   },
 ): Promise<ReviewFetch> {
+  const released = releasesOf(environmentId).take();
   const asked = runAtomCommand(
     appAtomRegistry,
     nextReview,
@@ -49,11 +65,13 @@ function fetchNextCard(
         exclude: [...request.exclude],
         ...(request.more ? { more: true } : {}),
         ...(request.peek ? { peek: true } : {}),
+        ...(released.length > 0 ? { release: [...released] } : {}),
       },
     },
     { reportFailure: false, reportDefect: false },
   ).then((result): ReviewFetch => {
     if (result._tag !== "Success") {
+      releasesOf(environmentId).restore(released);
       return { _tag: "error", detail: reviewFailureDetail(squashAtomCommandFailure(result)) };
     }
     return { _tag: "answer", card: result.value.card, counts: result.value.counts };
@@ -84,8 +102,9 @@ const countsAskedAt = new Map<EnvironmentId, number>();
 export function createWordReviewSession(environmentId: EnvironmentId) {
   return createReviewSession({
     fetchNext: (request) => fetchNextCard(environmentId, request),
-    emit: (item) =>
-      withTimeout(reportAnnotationReview(environmentId, item), DELIVERY_WAIT_MS, false),
+    emit: (item) => reportAnnotationReview(environmentId, item),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    release: (cardId) => releasesOf(environmentId).add(cardId),
     monotonicNow,
     wallNow: () => Date.now(),
     uid: reviewUid,
