@@ -120,6 +120,30 @@ export function countsAfterGrades(
 }
 
 /**
+ * A review fetch that gives up after `ms` with an error. An answer arriving later is dropped, but a card in it was
+ * served all the same, so it goes to `release` for the next request: no served card is left unknown to the collector.
+ */
+export function fetchWithin(
+  fetch: Promise<ReviewFetch>,
+  ms: number,
+  release: (cardId: string) => void,
+): Promise<ReviewFetch> {
+  let late = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<ReviewFetch>((resolve) => {
+    timer = setTimeout(() => {
+      late = true;
+      resolve({ _tag: "error", detail: "The server took too long" });
+    }, ms);
+  });
+  const answered = fetch.then((answer) => {
+    if (late && answer._tag === "answer" && answer.card) release(answer.card.id);
+    return answer;
+  });
+  return Promise.race([answered, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
  * Cards served to this client and dropped unshown, for the next request's `release`: at most 20 a request, the latest
  * kept when there are more; a request that failed puts its own back.
  */
