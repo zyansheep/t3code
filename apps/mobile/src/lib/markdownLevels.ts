@@ -154,76 +154,39 @@ export function markdownEnglishOnly(markdown: string): string {
 // Their children are blocks, so each HTML node among them is a block of its own.
 const FLOW_PARENTS = new Set(["root", "blockquote", "listItem", "footnoteDefinition"]);
 const LEVELED_TAG = /^<(\/?)(abbr|span)[\s/>]/i;
+// The thresholds the contract has: a level from -2 up, written exactly so.
+const THRESHOLD = /^(-2|-1|0|1|2|3)$/;
+const LEVEL_MARKUP = /\sdata-on=/i;
 
 interface HtmlTag {
   readonly start: number;
   readonly end: number;
   readonly html: string;
+  /** Where the block or span holding the tag ends. */
+  readonly blockEnd: number;
 }
 
-const shownAt = (threshold: number, level: number) =>
-  level > ENGLISH_ONLY_LEVEL && level >= threshold;
+/** An element with a threshold: its opening tag, its closing one when there is one, and `data-on`. */
+interface Leveled {
+  readonly name: "abbr" | "span";
+  readonly opening: HtmlTag;
+  closing: HtmlTag | undefined;
+  readonly on: number;
+}
 
-/** An element's `data-on`, the lowest level it shows Japanese at; null without a whole number there. */
+/** Whether a message has the weave's level markup, so it renders, and its reports go, by level. */
+export function hasLevelMarkup(markdown: string): boolean {
+  return LEVEL_MARKUP.test(markdown);
+}
+
+/** An element's `data-on`, the lowest level it shows Japanese at; null for anything but a threshold of the contract. */
 function threshold(tag: HtmlTag): number | null {
-  const value = attribute(tag.html, "data-on")?.trim();
-  return value !== undefined && /^-?\d+$/.test(value) ? Number(value) : null;
-}
-
-/**
- * The edits for one element with a threshold, from its opening tag through its closing one, or through `end`, the end
- * of what holds it, while its closing tag has not streamed in yet.
- */
-function levelEdits(
-  name: "abbr" | "span",
-  opening: HtmlTag,
-  closing: HtmlTag | undefined,
-  end: number,
-  level: number,
-  edits: Edit[],
-) {
-  const on = threshold(opening);
-  if (on === null) return;
-  const whole = { start: opening.start, end: closing?.end ?? end };
-  if (name === "abbr") {
-    if (shownAt(on, level)) return;
-    const english =
-      attribute(opening.html, "data-en") ?? glossMeaning(attribute(opening.html, "title") ?? "");
-    edits.push({ ...whole, content: plainText(english) });
-    return;
-  }
-  const twin = attribute(opening.html, "data-jw");
-  if (twin !== "ja" && twin !== "en") return;
-  if ((twin === "ja") !== shownAt(on, level)) {
-    edits.push({ ...whole, content: "" });
-    return;
-  }
-  // The twin shown: its tags go, what they hold stays, Markdown and glosses included.
-  edits.push({ start: opening.start, end: opening.end, content: "" });
-  if (closing) edits.push({ start: closing.start, end: closing.end, content: "" });
-}
-
-/** Pairs one run's `<abbr>` and `<span>` tags, inner ones first, and edits those with a threshold. */
-function pairLeveled(tags: ReadonlyArray<HtmlTag>, end: number, level: number, edits: Edit[]) {
-  const open = { abbr: [] as HtmlTag[], span: [] as HtmlTag[] };
-  for (const tag of tags) {
-    const match = LEVELED_TAG.exec(tag.html);
-    if (!match) continue;
-    const name = match[2]!.toLowerCase() as "abbr" | "span";
-    if (match[1] === "") {
-      if (!tag.html.endsWith("/>")) open[name].push(tag);
-      continue;
-    }
-    const opening = open[name].pop();
-    if (opening) levelEdits(name, opening, tag, end, level, edits);
-  }
-  for (const name of ["abbr", "span"] as const) {
-    for (const opening of open[name]) levelEdits(name, opening, undefined, end, level, edits);
-  }
+  const value = attribute(tag.html, "data-on");
+  return value !== null && THRESHOLD.test(value) ? Number(value) : null;
 }
 
 /** The tags of an HTML node, by their offsets in the message; code inside an HTML block keeps its tags. */
-function htmlTags(markdown: string, node: MarkdownNode): HtmlTag[] {
+function htmlTags(markdown: string, node: MarkdownNode, blockEnd: number): HtmlTag[] {
   const start = startOf(node);
   const end = endOf(node);
   if (node.type !== "html" || start === undefined || end === undefined) return [];
@@ -231,37 +194,111 @@ function htmlTags(markdown: string, node: MarkdownNode): HtmlTag[] {
     start: start + match.index,
     end: start + match.index + match[0].length,
     html: match[0],
+    blockEnd,
   }));
 }
 
-// Inline HTML comes one tag per node, so a paragraph's or a span's tags pair across its children, as markdownWithHtml
-// pairs anchors; code is never an HTML node, so code keeps whatever it shows.
-function collectLeveled(markdown: string, node: MarkdownNode, level: number, edits: Edit[]) {
+// Code is never an HTML node, so code keeps whatever markup it shows.
+function collectTags(markdown: string, node: MarkdownNode, tags: HtmlTag[]) {
   if (!("children" in node)) return;
   const children: ReadonlyArray<MarkdownNode> = node.children;
-  if (FLOW_PARENTS.has(node.type)) {
-    for (const child of children) {
-      const end = endOf(child);
-      if (end !== undefined) pairLeveled(htmlTags(markdown, child), end, level, edits);
-    }
-  } else {
-    const tags = children.flatMap((child) => htmlTags(markdown, child));
-    const end = children.length > 0 ? endOf(children[children.length - 1]!) : undefined;
-    if (tags.length > 0 && end !== undefined) pairLeveled(tags, end, level, edits);
+  const last = children.length > 0 ? endOf(children[children.length - 1]!) : undefined;
+  for (const child of children) {
+    const end = FLOW_PARENTS.has(node.type) ? endOf(child) : last;
+    if (end !== undefined) tags.push(...htmlTags(markdown, child, end));
+    collectTags(markdown, child, tags);
   }
-  for (const child of children) collectLeveled(markdown, child, level, edits);
 }
 
 /**
- * The message as written at `level` (-3 to 3, -3 while English only is on), before markdownWithHtml drops attributes:
- * a swapped word, `<abbr data-en="English" data-on="N">`, and a sentence's twins, `<span data-jw="ja" data-on="N">`
- * then `<span data-jw="en" data-on="N">`, show their Japanese at levels N and up and their English below; nothing is
- * Japanese at -3. Anything without a threshold stays as it is, so a message from before levels comes back unchanged.
+ * Pairs `<abbr>` and `<span>` tags in the order they come, inner ones first and across blocks, so a twin with a blank
+ * line in it is still one; returns those with a threshold.
  */
-export function markdownAtLevel(markdown: string, level: number): string {
-  if (!/\sdata-on\s*=/i.test(markdown)) return markdown;
+function leveledElements(tags: ReadonlyArray<HtmlTag>): Leveled[] {
+  const open = { abbr: [] as Leveled[], span: [] as Leveled[] };
+  const elements: Leveled[] = [];
+  for (const tag of [...tags].sort((a, b) => a.start - b.start)) {
+    const match = LEVELED_TAG.exec(tag.html);
+    if (!match) continue;
+    const name = match[2]!.toLowerCase() as "abbr" | "span";
+    if (match[1] === "/") {
+      const opening = open[name].pop();
+      if (opening) opening.closing = tag;
+      continue;
+    }
+    if (tag.html.endsWith("/>")) continue;
+    const element: Leveled = { name, opening: tag, closing: undefined, on: threshold(tag) ?? NaN };
+    open[name].push(element);
+    if (!Number.isNaN(element.on)) elements.push(element);
+  }
+  return elements;
+}
+
+const twinOf = (element: Leveled) =>
+  element.name === "span" ? attribute(element.opening.html, "data-jw") : null;
+
+/**
+ * The message as written at `level` (-3 to 3, -3 while English only is on), before markdownWithHtml drops attributes:
+ * a swapped word, `<abbr data-en data-on="N">`, and a sentence's twins, `<span data-jw="ja|en" data-on="N">`, show
+ * their Japanese at levels N and up and their English below; anything without a threshold stays as written.
+ */
+export function markdownAtLevel(markdown: string, level: number, streaming = false): string {
+  if (!hasLevelMarkup(markdown)) return markdown;
+  const tags: HtmlTag[] = [];
+  collectTags(markdown, parseMarkdownSource(markdown), tags);
+  const elements = leveledElements(tags);
+  const messageEnd = markdown.trimEnd().length;
   const edits: Edit[] = [];
-  collectLeveled(markdown, parseMarkdownSource(markdown), level, edits);
+  const twins = elements.filter((element) => {
+    const twin = twinOf(element);
+    return twin === "ja" || twin === "en";
+  });
+  // Where each element ends: its closing tag, or the end while `streaming` in. Broken markup never cuts what follows:
+  // a Japanese twin left open ends where its English twin starts, or stays as written; an English one left open shows
+  // and its Japanese twin goes.
+  const endOfElement = (element: Leveled): number | null => {
+    if (element.closing) return element.closing.end;
+    if (streaming && element.opening.blockEnd >= messageEnd) return element.opening.blockEnd;
+    if (twinOf(element) !== "ja") return null;
+    const next = twins[twins.indexOf(element) + 1];
+    return next && twinOf(next) === "en" ? next.opening.start : null;
+  };
+  const english = new Set<Leveled>();
+  twins.forEach((twin, index) => {
+    if (twinOf(twin) === "en" && endOfElement(twin) === null) {
+      english.add(twin);
+      const previous = twins[index - 1];
+      if (previous && twinOf(previous) === "ja") english.add(previous);
+    }
+  });
+
+  for (const element of elements) {
+    const { opening, closing } = element;
+    const end = endOfElement(element);
+    if (element.name === "abbr") {
+      if (level >= element.on || end === null) continue;
+      const englishText =
+        attribute(opening.html, "data-en") ?? glossMeaning(attribute(opening.html, "title") ?? "");
+      edits.push({ start: opening.start, end, content: plainText(englishText) });
+      continue;
+    }
+    const twin = twinOf(element);
+    if (twin !== "ja" && twin !== "en") continue;
+    if (end === null) {
+      // An English twin left open shows; a Japanese one with no English stays as written.
+      if (twin === "en") edits.push({ start: opening.start, end: opening.end, content: "" });
+      continue;
+    }
+    const visible =
+      twin === "ja" ? level >= element.on && !english.has(element) : level < element.on;
+    if (!visible) {
+      edits.push({ start: opening.start, end, content: "" });
+      continue;
+    }
+    // The twin shown: its tags go, what they hold stays, Markdown and glosses included.
+    edits.push({ start: opening.start, end: opening.end, content: "" });
+    if (closing) edits.push({ start: closing.start, end: closing.end, content: "" });
+  }
   // A hidden twin's edit covers the words inside it.
   return applyEdits(markdown, edits);
 }

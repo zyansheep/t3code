@@ -280,11 +280,13 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     }),
     [gt],
   );
-  const { englishOnly, japaneseLevel } = props;
+  const { englishOnly, japaneseLevel, streaming } = props;
   const { markdown, fileHrefs } = useMemo(() => {
     // The level picks from the message as written, whose attributes markdownWithHtml drops.
     const source =
-      japaneseLevel === undefined ? props.markdown : markdownAtLevel(props.markdown, japaneseLevel);
+      japaneseLevel === undefined
+        ? props.markdown
+        : markdownAtLevel(props.markdown, japaneseLevel, streaming);
     const shown = englishOnly ? markdownEnglishOnly : (content: string) => content;
     if (!fileEmbedLabel) {
       return {
@@ -303,7 +305,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
       ...files,
       markdown: markdownWithTextDirection(shown(markdownWithTableBreaks(files.markdown))),
     };
-  }, [props.markdown, fileEmbedLabel, englishOnly, japaneseLevel]);
+  }, [props.markdown, fileEmbedLabel, englishOnly, japaneseLevel, streaming]);
   // Glossed words a tap has opened, by occurrence: each shows its gloss until tapped again. Occurrences are numbered
   // anew at another level or English only, so those start with none open; streaming in keeps them.
   const glossView = `${japaneseLevel ?? ""}/${englishOnly ? "en" : ""}`;
