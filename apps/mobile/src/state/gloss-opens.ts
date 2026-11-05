@@ -92,17 +92,13 @@ function watchPending() {
   retryTimer = waiting.size > 0 ? setTimeout(deliverGlossOpens, RETRY_MS) : undefined;
 }
 
-/** Sends what is queued, and keeps doing so as servers come back; settles once this round is over. */
-function flushGlossOpens(): Promise<void> {
+/** Sends what is queued, and keeps doing so as servers come back. */
+function deliverGlossOpens() {
   wakeups ??= subscribeAppActive(deliverGlossOpens);
-  return queue
+  void queue
     .flush()
     .then(watchPending)
     .catch(() => undefined);
-}
-
-function deliverGlossOpens() {
-  void flushGlossOpens();
 }
 
 /** At startup: sends what an earlier run left queued. */
@@ -158,18 +154,19 @@ export function reportGlossOpen(input: {
 
 /**
  * Queues a review card's item (lib/reviewSession.ts) beside the gloss opens and sends it. Never throws or rejects:
- * resolves true once the server has taken it, false when it is still queued for later.
+ * resolves true once its server has taken it, now or on a later retry (a server that could not store it refuses the
+ * report, which stays queued), and false only if it is dropped unsent.
  */
 export function reportAnnotationReview(
   environmentId: EnvironmentId,
   item: Extract<AnnotationInteraction, { readonly kind: "review" }>,
 ): Promise<boolean> {
   try {
-    return queue
-      .add({ environmentId, item })
-      .then(flushGlossOpens)
-      .then(() => !queue.pending().some((entry) => entry.item.uid === item.uid))
-      .catch(() => false);
+    const uid = item.uid;
+    if (uid === undefined) return Promise.resolve(false);
+    const added = queue.add({ environmentId, item });
+    void added.then(deliverGlossOpens).catch(() => undefined);
+    return queue.settled(uid).catch(() => false);
   } catch {
     // The review goes on.
     return Promise.resolve(false);
