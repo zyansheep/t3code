@@ -78,6 +78,8 @@ export interface SelectableMarkdownTextProps {
    * words and sentences show as written.
    */
   readonly japaneseLevel?: number;
+  /** The markdown is still streaming in, so level markup left open at its end follows its threshold. */
+  readonly streaming?: boolean;
   /** Older messages' glossed Japanese shows as English (lib/markdownLevels.ts). */
   readonly englishOnly?: boolean;
   readonly fileContextMenu?: (href: string) => MarkdownFileContextMenu | undefined;
