@@ -174,7 +174,12 @@ import {
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
 import { reportAnnotationInteractions } from "../state/annotationInteractions";
-import { chatLevelAtom, englishOnlyAtom, watchAnnotationStatus } from "../state/annotationStatus";
+import {
+  annotationStatusKnownAtom,
+  chatLevelAtom,
+  englishOnlyAtom,
+  watchAnnotationStatus,
+} from "../state/annotationStatus";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { describeAnnotations, registerReadingMessage } from "../lib/annotationReading";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
@@ -1979,6 +1984,9 @@ function ChatMarkdown({
   // Reports from a message with levels carry the one it is rendered at.
   const reportedLevel = hasLevels ? level : undefined;
   const glossed = hasAbbreviations && !englishOnly;
+  // A message with levels reports only once its server's level is known, never at a guessed one.
+  const statusKnown = useAtomValue(annotationStatusKnownAtom(hasLevels ? environmentId : null));
+  const reporting = glossed && (!hasLevels || statusKnown);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the collector's chat level and English only for this message's server loaded
   useEffect(() => {
     if (annotated && environmentId) watchAnnotationStatus(environmentId);
@@ -1991,7 +1999,7 @@ function ChatMarkdown({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the rendered message's DOM with the shared reading listeners until it unmounts or changes
   useEffect(() => {
     const container = markdownRef.current;
-    if (!glossed || !environmentId || isStreaming || !container) return;
+    if (!reporting || !environmentId || isStreaming || !container) return;
     return registerReadingMessage({
       container,
       view: ANNOTATION_VIEW,
@@ -1999,7 +2007,7 @@ function ChatMarkdown({
       ...(reportedLevel === undefined ? {} : { level: reportedLevel }),
       report: (items) => reportReading(items),
     });
-  }, [glossed, environmentId, isStreaming, markdownRef, text, reportedLevel]);
+  }, [reporting, environmentId, isStreaming, markdownRef, text, reportedLevel]);
   const finishAbbreviation = () => {
     const open = openAbbreviation.current;
     openAbbreviation.current = null;
@@ -2033,7 +2041,8 @@ function ChatMarkdown({
       trigger,
       at: Date.now(),
       kind,
-      opened: container && openedAbbreviation(container, trigger, text, reportedLevel),
+      opened:
+        reporting && container ? openedAbbreviation(container, trigger, text, reportedLevel) : null,
     };
   };
 
