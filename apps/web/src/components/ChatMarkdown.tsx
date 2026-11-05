@@ -237,7 +237,7 @@ import { MarkdownExternalLinkContent } from "./chat/MarkdownExternalLink";
 import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 import { canUseMarkdownFileShellActions } from "./chat/MarkdownFileLink.logic";
 import { handleMarkdownFragmentClick } from "./chat/markdownFragments";
-import { rehypeChatLevel } from "./chat/markdownLevel";
+import { rehypeChatLevel } from "@t3tools/shared/markdownLevel";
 import { hastHasText, hastPlainTextDeep, plainHastText } from "./chat/markdownHast.logic";
 import {
   extractCodeBlock,

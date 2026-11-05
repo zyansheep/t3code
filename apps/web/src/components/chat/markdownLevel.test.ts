@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { WordsHastOptions } from "../../markdown/wordsHast";
 import { createMarkdownRenderer } from "./markdownRenderer";
-import { rehypeChatLevel } from "./markdownLevel";
+import { rehypeChatLevel } from "@t3tools/shared/markdownLevel";
 
 /** The chat's Words renderer (raw HTML, sanitizer), with a level transform or as written. */
 const renderer = (transform?: WordsHastOptions["transform"]) => {
