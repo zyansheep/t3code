@@ -388,6 +388,9 @@ describe("markdownAtLevel on markup the weave did not write", () => {
       '<abbr title="a > b" data',
       "</sp",
       '<span data-jw="ja" data-on="1"',
+      "<span data-jw='ja",
+      "<span data-jw='ja' data-on='1",
+      "<abbr title='a > b",
     ]) {
       expect(withoutPartialTag(before + partial)).toBe(before);
       expect(
@@ -419,6 +422,12 @@ describe("markdownAtLevel on markup the weave did not write", () => {
     expect(at(blockEnd, -3)).toBe("The problem is small.\n\nNext now.");
     expect(at(blockEnd, 3)).toBe(`The problem is small.\n\nNext ${gloss("今", "いま · now")}.`);
     expect(englishOnly(blockEnd)).toBe("The problem is small.\n\nNext now.");
+    // Only the Japanese its text starts with goes, up to English letters or digits right after it.
+    const letters = 'A <abbr title="てすと · test" data-en="test" data-on="1">テストv2 runs.';
+    expect(seen(letters, -3)).toBe("A testv2 runs.");
+    const digits =
+      'A <abbr title="もんだい · problem" data-en="problem" data-on="1">問題3 and more.';
+    expect(seen(digits, 3)).toBe("A problem3 and more.");
     // While it streams in at the end it still follows its threshold.
     const tail = 'The <abbr title="もんだい · problem" data-en="problem" data-on="1">問題';
     expect(at(tail, 0, true)).toBe("The problem");
