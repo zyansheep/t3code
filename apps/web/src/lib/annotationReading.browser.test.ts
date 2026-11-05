@@ -252,7 +252,7 @@ describe("reading signals in a message", () => {
     expect(left?.kind === "visible" && left.wall).toBeLessThan(5_000 + PAUSE_MS + 2_000); // not the whole time away
   });
 
-  it("sends a stay that a new level ends with the level and annotations it was read at", () => {
+  it("sends a stay that a new level ends with the level it was read at, and each level's word count", () => {
     using _reading = setup();
     const observer = FakeIntersectionObserver.last!;
     const container = document.createElement("div");
@@ -267,7 +267,8 @@ describe("reading signals in a message", () => {
     observer.show(paragraph, true);
     vi.advanceTimersByTime(2_000);
     // A lower level renders the message again before it registers at that level.
-    paragraph.innerHTML = 'Read the policy <abbr data-markdown-abbreviation="">notes</abbr>.';
+    paragraph.innerHTML =
+      'Read the security policy <abbr data-markdown-abbreviation="">notes</abbr>.';
     stop();
     stop = registerAt(0);
     observer.show(paragraph, true);
@@ -282,6 +283,13 @@ describe("reading signals in a message", () => {
     ).toEqual([
       { level: 1, annotations: ["CSP"] },
       { level: 0, annotations: ["notes"] },
+    ]);
+    // Each level shows other words, so each sends its own word count.
+    expect(
+      sent().flatMap((item) => (item.kind === "shown" ? [[item.level, item.words]] : [])),
+    ).toEqual([
+      [1, 4],
+      [0, 5],
     ]);
   });
 

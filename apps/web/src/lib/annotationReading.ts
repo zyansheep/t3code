@@ -171,7 +171,9 @@ const inView = new Set<Element>();
 const stays = new Map<Element, BlockStay>();
 const playing = new Set<HTMLMediaElement>();
 const queue = new Map<Report, AnnotationReading[]>();
-const shown = new Set<string>(); // view and context of each message sent as shown, so a remount doesn't resend it
+// View, context and level of each message sent as shown, so a remount doesn't resend it; each level of a message with
+// levels shows other words, so it has its own.
+const shown = new Set<string>();
 let observer: IntersectionObserver | null = null;
 let listening = false;
 let lastInput = Date.now();
@@ -346,7 +348,7 @@ function startStay(block: Element) {
   };
   stays.set(block, { ...newStay(now), message, snapshot });
   ticker ??= setInterval(tick, 1_000);
-  const key = `${message.view} ${message.context}`;
+  const key = `${message.view} ${message.context} ${message.level ?? ""}`;
   if (shown.has(key)) return;
   shown.add(key);
   const words = Math.min(countWords(message.container), SHOWN_MAX_WORDS);
