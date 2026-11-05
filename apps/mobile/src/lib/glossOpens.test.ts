@@ -1,5 +1,6 @@
 import {
   AnnotationEnglishSetInput,
+  AnnotationReportError,
   AnnotationInteractionsReportInput,
   AnnotationInteraction,
 } from "@t3tools/contracts";
@@ -8,10 +9,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   createGlossOpenQueue,
+  failedReportResult,
   fnv1a32,
   glossContextId,
   glossContextsOf,
   glossOpenItem,
+  type GlossOpenSendResult,
   type QueuedGlossOpen,
 } from "./glossOpens";
 
@@ -33,7 +36,7 @@ function harness(options: {
   send?: (
     environmentId: string,
     items: ReadonlyArray<AnnotationInteraction>,
-  ) => boolean | Promise<boolean>;
+  ) => GlossOpenSendResult | Promise<GlossOpenSendResult>;
 }) {
   const sent: Array<{ environmentId: string; uids: Array<string | undefined> }> = [];
   const saves: Array<ReadonlyArray<QueuedGlossOpen>> = [];
@@ -135,6 +138,51 @@ describe("createGlossOpenQueue", () => {
     await queue.flush();
     expect(queue.pending()).toEqual([]);
     expect(sent.map((call) => call.uids)).toEqual([["phone-s1-1"], ["phone-s1-1"]]);
+  });
+
+  it("settles a batch item by item when the server refused some of it for good, and sends none of it again", async () => {
+    const review = (n: number) => ({
+      kind: "review" as const,
+      at: NOW,
+      card: `c${n}`,
+      word: "mondai",
+      revealMs: 100,
+      shownMs: 900,
+      gradeMs: 900,
+      grade: 3 as const,
+      source: "mobile" as const,
+      uid: `phone-review-s1-${n}`,
+    });
+    let answer: GlossOpenSendResult = { rejected: [1] };
+    const { queue, sent } = harness({ send: () => answer });
+    await queue.add(entry(1));
+    await queue.add({ environmentId: "e1", item: review(1) });
+    await queue.add({ environmentId: "e1", item: review(2) });
+    const fates = Promise.all(
+      ["phone-s1-1", "phone-review-s1-1", "phone-review-s1-2"].map(queue.settled),
+    );
+    await queue.flush();
+    await expect(fates).resolves.toEqual([true, false, true]);
+    expect(queue.pending()).toEqual([]);
+    answer = true;
+    await queue.flush();
+    expect(sent).toHaveLength(1);
+  });
+
+  it("reads a failed report as refused items for good only when the server says the rest was stored", () => {
+    const refused = new AnnotationReportError({
+      detail: "1 review item not stored",
+      retryable: false,
+      rejected: [{ item: 2, error: "unknown card" }],
+    });
+    expect(failedReportResult(refused)).toEqual({ rejected: [2] });
+    expect(
+      failedReportResult(new AnnotationReportError({ detail: "x", retryable: false })),
+    ).toEqual({ rejected: [] });
+    expect(
+      failedReportResult(new AnnotationReportError({ detail: "unreachable", retryable: true })),
+    ).toBe(false);
+    expect(failedReportResult(new Error("socket closed"))).toBe(false);
   });
 
   it("settles an item's fate only when it leaves the queue: taken on a retry, or dropped unsent", async () => {

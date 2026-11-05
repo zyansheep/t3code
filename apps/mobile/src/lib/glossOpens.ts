@@ -5,7 +5,8 @@
  * The same queue carries the review screen's items (lib/reviewSession.ts).
  */
 import type { AnnotationInteraction, AnnotationOpen } from "@t3tools/contracts";
-import { ANNOTATION_REPORT_MAX_ITEMS } from "@t3tools/contracts";
+import { ANNOTATION_REPORT_MAX_ITEMS, AnnotationReportError } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 
 const WORD_MAX_LENGTH = 40;
 /** The collector rejects items older than 7 days, so older ones are not worth keeping. */
@@ -77,15 +78,32 @@ export interface QueuedGlossOpen {
   readonly item: AnnotationInteraction;
 }
 
+/**
+ * How a server answered one batch: stored all of it (`true`), not reached or failed (`false`: the batch stays queued
+ * and goes again under the same uids), or stored all but the items it refused, by index in the batch, for good.
+ */
+export type GlossOpenSendResult = boolean | { readonly rejected: ReadonlyArray<number> };
+
+const isReportError = Schema.is(AnnotationReportError);
+
+/**
+ * What a failed report means for its batch: refused items for good when the server says the rest was stored, else
+ * (the collector out of reach, the connection, an older server) the whole batch again later.
+ */
+export function failedReportResult(failure: unknown): GlossOpenSendResult {
+  if (!isReportError(failure) || failure.retryable) return false;
+  return { rejected: (failure.rejected ?? []).map((refused) => refused.item) };
+}
+
 export interface GlossOpenQueueOptions {
   /** Reads what an earlier run left; throws or returns junk when there is nothing usable. */
   readonly load: () => Promise<unknown>;
   readonly save: (entries: ReadonlyArray<QueuedGlossOpen>) => Promise<void>;
-  /** Sends one batch to one environment; true once the server has taken it. */
+  /** Sends one batch to one environment. */
   readonly send: (
     environmentId: string,
     items: ReadonlyArray<AnnotationInteraction>,
-  ) => Promise<boolean>;
+  ) => Promise<GlossOpenSendResult>;
   readonly isItem: (value: unknown) => value is AnnotationInteraction;
   readonly now: () => number;
 }
@@ -147,9 +165,18 @@ export function createGlossOpenQueue(options: GlossOpenQueueOptions) {
     }
   })();
 
-  const remove = (taken: ReadonlySet<string | undefined>) => {
-    entries = entries.filter((entry) => !taken.has(entry.item.uid));
-    settle(taken, true);
+  /** The batch has left the queue: its items were stored, but for those the server refused for good. */
+  const remove = (batch: ReadonlyArray<AnnotationInteraction>, refused: ReadonlySet<number>) => {
+    const gone = new Set(batch.map((item) => item.uid));
+    entries = entries.filter((entry) => !gone.has(entry.item.uid));
+    settle(
+      batch.filter((_, index) => !refused.has(index)).map((item) => item.uid),
+      true,
+    );
+    settle(
+      batch.filter((_, index) => refused.has(index)).map((item) => item.uid),
+      false,
+    );
   };
 
   const drain = async () => {
@@ -163,14 +190,14 @@ export function createGlossOpenQueue(options: GlossOpenQueueOptions) {
         .filter((entry) => entry.environmentId === first.environmentId)
         .slice(0, ANNOTATION_REPORT_MAX_ITEMS)
         .map((entry) => entry.item);
-      let sent = false;
+      let sent: GlossOpenSendResult = false;
       try {
         sent = await options.send(first.environmentId, batch);
       } catch {
         sent = false;
       }
-      if (sent) remove(new Set(batch.map((item) => item.uid)));
-      else failed.add(first.environmentId);
+      if (sent === false) failed.add(first.environmentId);
+      else remove(batch, new Set(sent === true ? [] : sent.rejected));
     }
     await persist();
   };
@@ -200,8 +227,8 @@ export function createGlossOpenQueue(options: GlossOpenQueueOptions) {
   };
 
   /**
-   * Settles once the item with `uid` has left the queue: true when its server took it (in this flush or a later
-   * retry), false when it was dropped unsent. An item not queued counts as taken.
+   * Settles once the item with `uid` has left the queue: true when its server stored it (in this flush or a later
+   * retry), false when the server refused it for good or it was dropped unsent. An item not queued counts as stored.
    */
   const settled = (uid: string): Promise<boolean> =>
     loaded.then(() => {
