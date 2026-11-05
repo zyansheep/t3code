@@ -9,11 +9,13 @@ import { subscribeAppActive } from "../lib/appState";
 import { writeFileAtomically } from "../lib/atomic-file";
 import {
   createGlossOpenQueue,
+  glossContextId,
   glossOpenItem,
   glossOpenSession,
   type QueuedGlossOpen,
 } from "../lib/glossOpens";
 import { appAtomRegistry } from "./atom-registry";
+import { glossedMessagesOnScreen } from "./chat-japanese-view";
 
 const QUEUE_FILE = "gloss-opens.json";
 const SEND_TIMEOUT_MS = 15_000;
@@ -117,6 +119,22 @@ export function installGlossOpenDelivery(): () => void {
 let session: string | undefined;
 let sequence = 0;
 
+function phoneSession(at: number): string {
+  session ??= glossOpenSession(at, Math.random().toString(36).slice(2, 8));
+  return session;
+}
+
+/**
+ * The messages with glosses on screen by the view and context their reports carry: the view of this app run, as each
+ * opened word's own view starts, and the message's context, as the desktop names it.
+ */
+export function glossContextsOnScreen(): Array<{ view: string; context: string }> {
+  const view = `phone-${phoneSession(Date.now())}`;
+  return glossedMessagesOnScreen()
+    .slice(0, 30)
+    .map((text) => ({ view, context: glossContextId(text) }));
+}
+
 /** Reports a word tapped open. Never throws and never waits: a failed report must not touch the UI. */
 export function reportGlossOpen(input: {
   readonly environmentId: EnvironmentId;
@@ -125,10 +143,9 @@ export function reportGlossOpen(input: {
 }): void {
   try {
     const at = Date.now();
-    session ??= glossOpenSession(at, Math.random().toString(36).slice(2, 8));
     sequence += 1;
     const item = glossOpenItem({
-      session,
+      session: phoneSession(at),
       sequence,
       messageText: input.messageText,
       word: input.word,

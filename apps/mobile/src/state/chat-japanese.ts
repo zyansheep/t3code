@@ -1,4 +1,4 @@
-import type { AnnotationStatus, EnvironmentId } from "@t3tools/contracts";
+import type { AnnotationEnglish, AnnotationStatus, EnvironmentId } from "@t3tools/contracts";
 import { WS_METHODS } from "@t3tools/contracts";
 import {
   type AtomCommandResult,
@@ -13,16 +13,31 @@ import { connectionAtomRuntime } from "../connection/runtime";
 import { subscribeAppActive } from "../lib/appState";
 import { appAtomRegistry } from "./atom-registry";
 import { annotationStatusAtom } from "./chat-japanese-view";
+import { glossContextsOnScreen } from "./gloss-opens";
 import { workspaceConnections } from "./workspace";
 
 /**
- * The collector's chat Japanese, as the Z3 Code desktop reads it (apps/web's state/annotationStatus.ts), through each
- * environment's server: whether there is a collector, its level and English only.
+ * The collector's chat Japanese, as the Z3 Code desktop reads and changes it (apps/web's state/annotationStatus.ts),
+ * through each environment's server: whether there is a collector, its level, stepped lighter or heavier for a while,
+ * and English only.
  */
 
 const getAnnotationStatus = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:annotations:status",
   tag: WS_METHODS.serverGetAnnotationStatus,
+});
+
+// Steps and toggles run one at a time, so the last answer is the current state.
+const adjustAnnotationIntensity = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:annotations:intensity",
+  tag: WS_METHODS.serverAdjustAnnotationIntensity,
+  concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+});
+
+const setAnnotationEnglish = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:annotations:english",
+  tag: WS_METHODS.serverSetAnnotationEnglish,
+  concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
 });
 
 const REFRESH_MS = 5 * 60_000;
@@ -139,3 +154,53 @@ export const connectedEnvironmentIdsAtom = Atom.make((get) =>
     .map((environment) => environment.environmentId)
     .join("\n"),
 ).pipe(Atom.withLabel("mobile:connected-environment-ids"));
+
+export type ChatJapaneseChange<A> =
+  | { readonly ok: true; readonly value: A }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * Turns English only on or off at the collector, sending the messages with glosses on screen when it turns on, and
+ * applies the answer to every message at once. Null when the request was interrupted.
+ */
+export async function setEnglishOnly(
+  environmentId: EnvironmentId,
+  on: boolean,
+): Promise<ChatJapaneseChange<AnnotationEnglish> | null> {
+  const result = await runAtomCommand(
+    appAtomRegistry,
+    setAnnotationEnglish,
+    { environmentId, input: { on, contexts: on ? glossContextsOnScreen() : [] } },
+    { reportFailure: false, reportDefect: false },
+  );
+  if (result._tag !== "Success") {
+    const reason = failureReason(result);
+    return reason === null ? null : { ok: false, reason };
+  }
+  const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
+  setStatus(environmentId, {
+    intensity: current?.intensity ?? { level: 0, until: 0 },
+    english: result.value,
+  });
+  return { ok: true, value: result.value };
+}
+
+/** Steps the chat level by one through the collector and keeps its answer. */
+export async function stepAnnotationLevel(
+  environmentId: EnvironmentId,
+  step: 1 | -1,
+): Promise<ChatJapaneseChange<AnnotationStatus["intensity"]> | null> {
+  const result = await runAtomCommand(
+    appAtomRegistry,
+    adjustAnnotationIntensity,
+    { environmentId, input: { step } },
+    { reportFailure: false, reportDefect: false },
+  );
+  if (result._tag !== "Success") {
+    const reason = failureReason(result);
+    return reason === null ? null : { ok: false, reason };
+  }
+  const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
+  if (current) setStatus(environmentId, { ...current, intensity: result.value });
+  return { ok: true, value: result.value };
+}

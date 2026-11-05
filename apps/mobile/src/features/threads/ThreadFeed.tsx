@@ -113,6 +113,7 @@ import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { textDirection } from "@t3tools/shared/textDirection";
 import { useFocusEffect, useIsFocused, useNavigation } from "@react-navigation/native";
+import { useAtomValue } from "@effect/atom-react";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
 import { useDeviceType } from "../../native/native-layout-metrics";
 import { isDuoDevice } from "../../lib/device-type";
@@ -298,6 +299,7 @@ import {
 import { ThreadWorkflowOpening, useWorkflowOpening } from "./thread-workflow-opening";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
+import { englishOnlyAtom, showGlossedMessage } from "../../state/chat-japanese-view";
 import {
   fileRoutePathSegments,
   isAbsolutePath,
@@ -1310,8 +1312,10 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   const withGallery = useFilePreviewGallery();
   const onImagePress = props.linkHandlers.onImagePress;
   const { environmentId, glossMessageText } = props;
+  const englishOnly = useAtomValue(englishOnlyAtom(environmentId));
+  // Words shown in English are not glosses to open.
   const onGlossOpen = (word: string) => {
-    if (glossMessageText !== undefined) {
+    if (glossMessageText !== undefined && !englishOnly) {
       reportGlossOpen(environmentId, glossMessageText, word);
     }
   };
@@ -1326,18 +1330,33 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   };
 
   return (
-    <AssistantMarkdownBlocks
-      markdown={liveMarkdown}
-      markdownStyles={props.markdownStyles}
-      linkHandlers={linkHandlers}
-      onUseArtifactTemplate={props.onUseArtifactTemplate}
-      renderImage={props.renderImage}
-      skills={props.skills}
-      models={models}
-      onGlossOpen={onGlossOpen}
-    />
+    <>
+      {glossMessageText?.includes("<abbr") ? (
+        <GlossedMessageOnScreen text={glossMessageText} />
+      ) : null}
+      <AssistantMarkdownBlocks
+        markdown={liveMarkdown}
+        markdownStyles={props.markdownStyles}
+        linkHandlers={linkHandlers}
+        onUseArtifactTemplate={props.onUseArtifactTemplate}
+        renderImage={props.renderImage}
+        skills={props.skills}
+        models={models}
+        onGlossOpen={onGlossOpen}
+        englishOnly={englishOnly}
+      />
+    </>
   );
 });
+
+/** Tells English only that a message with glosses is on screen; apart, so scrolling re-renders only this. */
+function GlossedMessageOnScreen(props: { readonly text: string }) {
+  const visible = useContext(ThreadMediaVisibleContext);
+  const { text } = props;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the list of messages with glosses on screen, which English only sends as the desktop's reading tracker does
+  useEffect(() => (visible ? showGlossedMessage(text) : undefined), [visible, text]);
+  return null;
+}
 
 // Folds split first, so an artifact card inside a fold stays inside it.
 function AssistantMarkdownBlocks(props: {
@@ -1351,6 +1370,7 @@ function AssistantMarkdownBlocks(props: {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
   readonly models: ReturnType<typeof useModelMentions>;
   readonly onGlossOpen: (word: string) => void;
+  readonly englishOnly: boolean;
 }) {
   const { blocks, definitions } = useMemo(() => {
     const blocks = splitMarkdownDetails(props.markdown).map((block) =>
@@ -1402,6 +1422,7 @@ function AssistantMarkdownBlocks(props: {
           {...props.linkHandlers}
           renderImage={props.renderImage}
           onGlossOpen={props.onGlossOpen}
+          englishOnly={props.englishOnly}
         />
       );
     });
