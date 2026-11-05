@@ -1,3 +1,4 @@
+import { rehypeMarkLevelTags } from "./markdownLevel.ts";
 import type { Paragraph, PhrasingContent, Root, RootContent } from "mdast";
 import { remarkKeepWindowsPaths } from "./markdownWindowsPaths.ts";
 import { type PluggableList, type Processor, type Transformer, unified } from "unified";
@@ -196,11 +197,18 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
     div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
     a: [...(defaultSchema.attributes?.a ?? []), "dataPullRequestAutolink"],
-    abbr: ["dataMarkdownTitle", "dataEn", ["dataOn", LEVEL_THRESHOLD]],
+    abbr: [
+      "dataMarkdownTitle",
+      "dataEn",
+      ["dataOn", LEVEL_THRESHOLD],
+      ["dataUnclosed", "end", "block"],
+    ],
     span: [
       ...(defaultSchema.attributes?.span ?? []),
       ["dataJw", "ja", "en"],
       ["dataOn", LEVEL_THRESHOLD],
+      ["dataUnclosed", "end", "block"],
+      ["dataApart", ""],
     ],
     img: [
       ...(defaultSchema.attributes?.img ?? []),
@@ -311,22 +319,6 @@ function needsHtmlParser(node: MarkdownImageHastNode, scope: HtmlScope): boolean
 
 const TOP_SCOPE: HtmlScope = { anchor: false, paragraph: false, heading: false };
 
-// A self-closing tag means nothing to an HTML parser for abbr or span, which would then take in the rest of the block.
-const SELF_CLOSING_LEVEL_TAG = /<(?:abbr|span)\b[^>]*\sdata-(?:on|jw)\b[^>]*\/>/giu;
-
-/** Drops a self-closing chat level tag (`<abbr data-on="1"/>`), which has no text to show. */
-function rehypeDropSelfClosingLevelTags() {
-  return (tree: MarkdownImageHastNode) => {
-    const visit = (node: MarkdownImageHastNode) => {
-      if (node.type === "raw" && node.value) {
-        node.value = node.value.replace(SELF_CLOSING_LEVEL_TAG, "");
-      }
-      node.children?.forEach(visit);
-    };
-    visit(tree);
-  };
-}
-
 /** rehype-raw reparses the whole tree through an HTML parser, which most trees can skip. */
 function rehypeRawWhenPresent(this: Processor) {
   const transform = rehypeRaw.call(this) as unknown as (
@@ -339,7 +331,7 @@ function rehypeRawWhenPresent(this: Processor) {
 
 export const CHAT_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   rehypePreserveBareAnchorPlaceholders,
-  rehypeDropSelfClosingLevelTags,
+  rehypeMarkLevelTags,
   rehypeRawWhenPresent,
   rehypePreserveImageSourceMeta,
   rehypePreserveAbbreviationTitles,
