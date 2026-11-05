@@ -256,31 +256,20 @@ describe("ReviewSession", () => {
     });
   });
 
-  it("sends a grade that may not have arrived again, under its uid, excluding its card until it is stored", async () => {
+  it("leaves a grade that may not have arrived to the outbox, excluding its card from then on", async () => {
     using _timers = fakeTimers();
-    const h = harness({ outcomes: ["failed", "failed", "stored"] });
+    const h = harness({ outcomes: ["failed"] });
     await showFirst(h);
     await h.answer(await h.ask(1), { card: null, counts: COUNTS });
     h.session.reveal();
     h.session.grade(3);
-    // The next card is asked for after the first answer, without the card whose grade is not stored.
+    // The next card is asked for after the first answer, without the card whose grade may not have arrived.
     expect((await h.ask(2)).input).toEqual({ exclude: ["a"], more: false });
-    expect(h.reports).toHaveLength(1);
-
-    await vi.advanceTimersByTimeAsync(999);
-    expect(h.reports).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(h.reports).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(h.reports).toHaveLength(3);
-    expect(new Set(h.reports.map((item) => item.uid))).toEqual(new Set(["uid-1"]));
-    expect(h.reports[2]).toEqual(h.reports[0]);
-
-    // Stored now, so it is no longer held back, and nothing is sent again.
     await h.answer(await h.ask(2), { card: B, counts: COUNTS });
-    expect((await h.ask(3)).input).toEqual({ exclude: ["b"], more: false });
+    expect((await h.ask(3)).input).toEqual({ exclude: ["b", "a"], more: false });
+    // The session itself never sends it again.
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(h.reports).toHaveLength(3);
+    expect(h.reports).toHaveLength(1);
   });
 
   it("does not send a rejected report again", async () => {
