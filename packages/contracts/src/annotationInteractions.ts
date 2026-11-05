@@ -90,7 +90,10 @@ const AnnotationTrace = Schema.Struct({
   ),
 });
 
-/** A message's first time on screen in its view, sent once with its `words`, which opens are counted against. */
+/**
+ * A message's first time on screen in its view (at each level, for a message with levels), sent once with its `words`,
+ * which opens are counted against.
+ */
 const AnnotationShown = Schema.Struct({
   ...AnnotationPlace,
   kind: Schema.Literal("shown"),

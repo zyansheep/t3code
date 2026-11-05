@@ -170,7 +170,7 @@ vi.mock(import("../hooks/useSettings"), async (original) => {
 import ChatMarkdown from "./ChatMarkdown";
 import { AppAtomRegistryProvider, appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
-import { annotationStatusAtom } from "../state/annotationStatus";
+import { annotationStatusAtom, stepAnnotationLevel } from "../state/annotationStatus";
 import { flush as flushReading, visibleReadingContexts } from "../lib/annotationReading";
 import { installChatRouteCommands } from "../shortcuts/chatRouteCommands";
 import { ThreadJapanesePanel } from "./chat/ThreadJapanesePanel";
@@ -214,6 +214,8 @@ function setup() {
   annotationReport.mockClear();
   englishSet.mockClear();
   collector.level = 0;
+  // Levels stored for the next start.
+  localStorage.clear();
   setPrimaryEnvironment(null);
   for (const environmentId of [ENGLISH_ENVIRONMENT, ENGLISH_PRIMARY]) {
     appAtomRegistry.set(annotationStatusAtom(environmentId), null);
@@ -966,5 +968,44 @@ describe("ChatMarkdown levels", () => {
     await act(() => setEnglishOnly(ENGLISH_ENVIRONMENT, true));
     await vi.waitFor(() => expect(paragraph.textContent).toBe("The problem is small. It is rain."));
     expect(paragraph.querySelector("abbr")).toBeNull();
+  });
+
+  it("reports only once its server's level is known, rendering until then at the level stored last", async () => {
+    setup();
+    // The level the collector answered at an earlier start, then a new start that hasn't read it yet.
+    setEnglishOnly(ENGLISH_ENVIRONMENT, false);
+    await stepAnnotationLevel(ENGLISH_ENVIRONMENT, 1);
+    appAtomRegistry.set(annotationStatusAtom(ENGLISH_ENVIRONMENT), null);
+    await using screen = await renderMessages(`${LEVELED} Again.`);
+    const paragraph = screen.container.querySelector("p")!;
+    expect(paragraph.textContent).toBe("The 問題 is small. It is 雨. Again.");
+    const pinned = async () => {
+      const word = paragraph.querySelector("abbr")!;
+      await userEvent.click(word);
+      await expect.element(page.getByText("もんだい · problem")).toBeVisible();
+      await userEvent.click(word);
+      await expect.element(page.getByText("もんだい · problem")).not.toBeInTheDocument();
+      flushReading();
+      return annotationReport.mock.calls.flatMap(
+        ([report]) => (report as { input: { items: Array<{ kind: string }> } }).input.items,
+      );
+    };
+    expect(await pinned()).toEqual([]);
+    expect(visibleReadingContexts()).toEqual([]);
+
+    await act(() =>
+      appAtomRegistry.set(annotationStatusAtom(ENGLISH_ENVIRONMENT), {
+        intensity: { level: 1, until: 0 },
+        english: { on: false, until: 0, at: 0 },
+      }),
+    );
+    await vi.waitFor(() => expect(visibleReadingContexts()).toHaveLength(1));
+    const items = await pinned();
+    expect(items.filter((item) => item.kind === "pin")).toEqual([
+      expect.objectContaining({ word: "問題", level: 1 }),
+    ]);
+    expect(items.filter((item) => item.kind === "shown")).toEqual([
+      expect.objectContaining({ level: 1 }),
+    ]);
   });
 });
