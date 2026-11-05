@@ -10,6 +10,7 @@ import { glossOpenSession } from "../lib/glossOpens";
 import {
   createCardReleases,
   createReviewSession,
+  fetchWithin,
   reviewFailureDetail,
   type ReviewFetch,
 } from "../lib/reviewSession";
@@ -17,6 +18,7 @@ import { appAtomRegistry } from "./atom-registry";
 import { reviewCountsAtom } from "./chat-japanese-view";
 import { reportAnnotationReview } from "./gloss-opens";
 
+/** Longer than the server's 3 s on its collector, as the way to the server can be slow too (fetchWithin). */
 const FETCH_TIMEOUT_MS = 15_000;
 /** The badge's counts are asked for at most this often outside a review. */
 const COUNTS_REFRESH_MS = 10 * 60_000;
@@ -25,14 +27,6 @@ const nextReview = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:annotations:review-next",
   tag: WS_METHODS.serverNextAnnotationReview,
 });
-
-function withTimeout<A>(promise: Promise<A>, ms: number, late: A): Promise<A> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<A>((resolve) => {
-    timer = setTimeout(() => resolve(late), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
 
 /** Per environment, the cards to release with the next request, the badge's peeks included. */
 const releases = new Map<EnvironmentId, ReturnType<typeof createCardReleases>>();
@@ -76,10 +70,7 @@ function fetchNextCard(
     }
     return { _tag: "answer", card: result.value.card, counts: result.value.counts };
   });
-  return withTimeout(asked, FETCH_TIMEOUT_MS, {
-    _tag: "error",
-    detail: "The server took too long",
-  });
+  return fetchWithin(asked, FETCH_TIMEOUT_MS, (cardId) => releasesOf(environmentId).add(cardId));
 }
 
 /** Monotonic where the runtime has performance.now (Hermes does), so a clock change can't bend a duration. */

@@ -1,11 +1,12 @@
 import { AnnotationInteractionsReportInput, type AnnotationReviewCard } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   countsAfterGrades,
   createCardReleases,
   createReviewSession,
+  fetchWithin,
   REVIEW_EXCLUDE_MAX,
   reviewFailureDetail,
   type AnnotationReviewItem,
@@ -505,5 +506,40 @@ describe("reviewFailureDetail", () => {
     expect(reviewFailureDetail(new Error("  socket\n closed "))).toBe("socket closed");
     expect(reviewFailureDetail(undefined)).toBe("Could not load a card");
     expect(reviewFailureDetail("x".repeat(400))).toHaveLength(160);
+  });
+});
+
+describe("fetchWithin", () => {
+  const served = { id: "c9", ja: "mondai", kana: "", gloss: "problem" } as AnnotationReviewCard;
+
+  it("gives up after its time, and releases a card that comes after it", async () => {
+    vi.useFakeTimers();
+    try {
+      let answer!: (fetch: ReviewFetch) => void;
+      const released: string[] = [];
+      const fetched = fetchWithin(
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+        15_000,
+        (id) => released.push(id),
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(fetched).resolves.toEqual({ _tag: "error", detail: "The server took too long" });
+      answer({ _tag: "answer", card: served });
+      await vi.runAllTimersAsync();
+      expect(released).toEqual(["c9"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hands an answer in time on, releasing nothing", async () => {
+    const released: string[] = [];
+    const answer: ReviewFetch = { _tag: "answer", card: served };
+    await expect(
+      fetchWithin(Promise.resolve(answer), 15_000, (id) => released.push(id)),
+    ).resolves.toBe(answer);
+    expect(released).toEqual([]);
   });
 });
