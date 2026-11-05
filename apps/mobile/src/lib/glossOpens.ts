@@ -27,6 +27,20 @@ export function glossContextId(messageText: string): string {
   return `m${fnv1a32(messageText).toString(36)}`;
 }
 
+/**
+ * The messages on screen for an English-only press, as the phone's reports name them: per word opened in a message, that
+ * open's own view with the message's context, the pairs the collector has records of. The phone sends no word counts,
+ * so a message with no word opened has no record and is left out. At most 30, as the server takes.
+ */
+export function glossContextsOf(
+  contexts: ReadonlyArray<string>,
+  openedViews: ReadonlyMap<string, ReadonlySet<string>>,
+): Array<{ view: string; context: string }> {
+  return contexts
+    .flatMap((context) => [...(openedViews.get(context) ?? [])].map((view) => ({ view, context })))
+    .slice(0, 30);
+}
+
 /** A session id, once per app run: a later run is a new showing of the same message, as a new desktop window is. */
 export function glossOpenSession(nowMs: number, random: string): string {
   return `${nowMs.toString(36)}${random}`;
