@@ -22,6 +22,11 @@ export function fnv1a32(input: string): number {
   return hash >>> 0;
 }
 
+/** A message's context id, as the desktop names the message from its text. */
+export function glossContextId(messageText: string): string {
+  return `m${fnv1a32(messageText).toString(36)}`;
+}
+
 /** A session id, once per app run: a later run is a new showing of the same message, as a new desktop window is. */
 export function glossOpenSession(nowMs: number, random: string): string {
   return `${nowMs.toString(36)}${random}`;
@@ -45,7 +50,7 @@ export function glossOpenItem(input: {
     at: input.at,
     dwellMs: 0,
     view: `phone-${input.session}-${fnv1a32(word).toString(36)}`,
-    context: `m${fnv1a32(input.messageText).toString(36)}`,
+    context: glossContextId(input.messageText),
     position: 0,
     box: [0, 0, 0, 0],
     annotations: [[word, 0, 0]],

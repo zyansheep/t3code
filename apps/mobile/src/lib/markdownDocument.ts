@@ -574,6 +574,11 @@ export function markdownForNativeParsing(markdown: string): string {
   return markdownWithImageParagraphs(normalizedMarkdown(markdown));
 }
 
+/** The syntax tree of Markdown as it is written, with offsets into it. */
+export function parseMarkdownSource(markdown: string): Root {
+  return parser.parse(markdown);
+}
+
 export function parseMarkdownDocument(markdown: string): Root {
   return parser.parse(normalizedMarkdown(markdown));
 }
