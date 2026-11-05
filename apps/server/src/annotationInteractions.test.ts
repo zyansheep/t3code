@@ -1,5 +1,8 @@
 import { assert, it } from "@effect/vitest";
-import { AnnotationInteractionsReportInput } from "@t3tools/contracts";
+import {
+  AnnotationInteractionsReportInput,
+  type AnnotationReviewNextInput,
+} from "@t3tools/contracts";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -88,9 +91,9 @@ describe("forwardAnnotationInteractions", () => {
     }),
   );
 
-  it.effect("forwards a review card's timing whole, like any other item", () =>
+  it.effect("forwards a review card's timing and grade whole, like any other item", () =>
     Effect.gen(function* () {
-      const reviewed = {
+      const left = {
         kind: "review",
         at: 1_800_000_000_000,
         card: "c42",
@@ -100,13 +103,25 @@ describe("forwardAnnotationInteractions", () => {
         source: "desktop",
         uid: "review-1",
       } as const;
+      const graded = {
+        ...left,
+        card: "c43",
+        revealMs: 1_200,
+        shownMs: 3_000,
+        grade: 3,
+        gradeMs: 3_000,
+        uid: "review-2",
+      } as const;
       const { requests, run } = forwardWith(
         { T3CODE_ANNOTATION_EVENTS_URL: COLLECTOR },
         200,
-        decodeReport({ items: [reviewed] }),
+        decodeReport({ items: [left, graded] }),
       );
       yield* run;
-      assert.deepStrictEqual(JSON.parse(requests[0]!.body), { surface: "t3", items: [reviewed] });
+      assert.deepStrictEqual(JSON.parse(requests[0]!.body), {
+        surface: "t3",
+        items: [left, graded],
+      });
     }),
   );
 
@@ -224,6 +239,7 @@ describe("adjustAnnotationIntensity", () => {
 const reviewWith = (
   env: Record<string, string>,
   answer: { readonly status: number; readonly body: unknown } | null,
+  input: AnnotationReviewNextInput = { source: "desktop", exclude: ["c1"] },
 ) => {
   const requests: Array<{ readonly url: string; readonly body: string }> = [];
   const client = HttpClient.make((request) => {
@@ -244,7 +260,7 @@ const reviewWith = (
           ),
         );
   });
-  const run = nextAnnotationReview({ source: "desktop", exclude: ["c1"] }).pipe(
+  const run = nextAnnotationReview(input).pipe(
     Effect.provideService(HttpClient.HttpClient, client),
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
   );
@@ -266,10 +282,45 @@ describe("nextAnnotationReview", () => {
     }),
   );
 
+  it.effect(
+    "passes Review more on, and returns the card's queue and intervals with the counts",
+    () =>
+      Effect.gen(function* () {
+        const card = {
+          id: "c42",
+          ja: "問題",
+          kana: "もんだい",
+          gloss: "problem",
+          queue: "learning",
+          intervals: { again: 60, hard: 360, good: 600, easy: 345_600 },
+        } as const;
+        const counts = { new: 12, learning: 3, review: 40 };
+        const { requests, run } = reviewWith(
+          configured,
+          { status: 200, body: { ok: true, card, counts } },
+          { source: "desktop", exclude: [], more: true },
+        );
+        assert.deepStrictEqual(yield* run, { card, counts });
+        assert.deepStrictEqual(JSON.parse(requests[0]!.body), {
+          source: "desktop",
+          exclude: [],
+          more: true,
+        });
+      }),
+  );
+
   it.effect("returns no card when the collector has nothing to review", () =>
     Effect.gen(function* () {
       const { run } = reviewWith(configured, { status: 200, body: { ok: true, card: null } });
       assert.deepStrictEqual(yield* run, { card: null });
+      const done = reviewWith(configured, {
+        status: 200,
+        body: { ok: true, card: null, counts: { new: 0, learning: 0, review: 0 } },
+      });
+      assert.deepStrictEqual(yield* done.run, {
+        card: null,
+        counts: { new: 0, learning: 0, review: 0 },
+      });
     }),
   );
 
