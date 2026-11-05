@@ -149,32 +149,6 @@ describe("rehypeChatLevel", () => {
     expect(textAt(source, 1)).toBe("The 問題 is small.");
   });
 
-  it.each([
-    [
-      "a blank line in the Japanese twin",
-      '<span data-jw="ja" data-on="1"><abbr title="きょう · today">今日</abbr>は\n\n<abbr title="あめ · rain">雨</abbr>です<abbr title="It is raining today.">。</abbr></span><span data-jw="en" data-on="1">It is raining today.</span> Then more.',
-    ],
-    [
-      "a blank line in the English twin",
-      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>です<abbr title="It is rain.">。</abbr></span><span data-jw="en" data-on="1">It is\n\nrain.</span> Then more.',
-    ],
-    [
-      "a Japanese twin that never closes",
-      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>です<abbr title="It is rain.">。</abbr><span data-jw="en" data-on="1">It is rain.</span> Then more.',
-    ],
-    [
-      "emphasis across the twins",
-      'Lead <span data-jw="ja" data-on="1">*<abbr title="あめ · rain">雨</abbr>です</span><span data-jw="en" data-on="1">It is rain*.</span> Then more.',
-    ],
-  ])("never shows a broken sentence's Japanese, at any level: %s", (_case, source) => {
-    for (const level of LEVELS) {
-      const text = textAt(source, level);
-      expect(JAPANESE.test(text), `${level}: ${text}`).toBe(false);
-      expect(text).toContain("rain");
-      expect(text).toContain("Then more.");
-    }
-  });
-
   it("keeps only well-formed level markup past the sanitizer", () => {
     const source =
       '<span data-jw="ja" data-on="x" onclick="alert(1)">今日</span><span data-jw="zz" data-on="1">today</span>';

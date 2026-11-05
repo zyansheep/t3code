@@ -253,6 +253,6 @@ export function searchableMessageSegments(
     skills,
     shouldPreserveAssistantLineBreaks(message.text),
     true,
-    level,
+    level && { ...level, streaming: message.streaming },
   );
 }

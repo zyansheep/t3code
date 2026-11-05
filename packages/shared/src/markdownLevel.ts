@@ -130,56 +130,70 @@ function twinsIn(parent: HastNode, out: Twin[] = [], nested = false): Twin[] {
 
 const isBlank = (node: HastNode) => node.type === "text" && (node.value ?? "").trim() === "";
 
-/** Whether a pair sits as written: the English twin right after the Japanese one, neither inside another twin. */
-const adjacent = (ja: Twin, en: Twin) =>
-  !ja.nested &&
-  !en.nested &&
-  ja.parent === en.parent &&
-  (ja.parent.children ?? []).slice(ja.index + 1, en.index).every(isBlank);
-
-/** A twin span in the source that holds a blank line or never closes, which markdown splits apart. */
-function splitTwinInSource(source: string): boolean {
-  for (const open of source.matchAll(TWIN_OPEN)) {
+/**
+ * How the twin spans in the source end: whether one holds a blank line or never closes (markdown splits it apart), and
+ * whether the last one is still open at the end, which while a reply streams is its tail.
+ */
+function twinSpansInSource(source: string) {
+  const opens = [...source.matchAll(TWIN_OPEN)];
+  let split = false;
+  let openAtEnd = 0;
+  for (const open of opens) {
     const rest = source.slice(open.index + open[0].length);
     const end = rest.search(SPAN_CLOSE);
-    if (end === -1 || BLANK_LINE.test(rest.slice(0, end))) return true;
+    if (end === -1) openAtEnd += 1;
+    else if (BLANK_LINE.test(rest.slice(0, end))) split = true;
   }
-  return false;
+  return { split, openAtEnd };
 }
 
-/**
- * Pairs each Japanese twin with the English twin after it in document order. A twin without its partner, a pair out
- * of place, or a twin the source shows split apart breaks the message: its parts may have landed outside their spans.
- */
-function pairTwins(tree: HastNode, source: string) {
-  const twins = twinsIn(tree);
-  const partners = new Map<HastNode, HastNode>();
-  let broken = false;
-  for (let index = 0; index < twins.length; index += 1) {
-    const twin = twins[index]!;
-    const next = twins[index + 1];
-    if (twin.ja && next && !next.ja && next.on === twin.on) {
-      partners.set(twin.node, next.node);
-      if (!adjacent(twin, next)) broken = true;
-      index += 1;
-    } else broken = true;
-  }
-  return {
-    twins: new Map(twins.map((twin) => [twin.node, twin])),
-    partners,
-    broken: broken || (twins.length > 0 && splitTwinInSource(source)),
+/** The translation of the Japanese twin's last sentence mark (`<abbr title="translation">。</abbr>`). */
+function lastSentenceTranslation(node: HastNode): string {
+  let translation = "";
+  const visit = (child: HastNode) => {
+    if (isSentenceMark(child)) translation = glossTitle(child);
+    else child.children?.forEach(visit);
   };
+  node.children?.forEach(visit);
+  return translation;
 }
 
 /**
- * Renders a tree at `level`. A Japanese twin below its threshold hides everything up to its English twin in document
- * order, so a twin split apart by markdown leaves nothing of its Japanese behind; a broken message shows every
- * sentence's English twin.
+ * The twins of a message: a Japanese span pairs with the English span right after it (only whitespace between) with
+ * the same threshold. A finished message with nested twins or a twin split apart or left open is broken; while a reply
+ * streams, the last twin may still be open, as its tail.
  */
-function renderAt(tree: HastNode, level: number, source: string) {
-  const { twins, partners, broken } = pairTwins(tree, source);
+function readTwins(tree: HastNode, source: string, streaming: boolean) {
+  const twins = twinsIn(tree);
+  const byNode = new Map(twins.map((twin) => [twin.node, twin]));
+  const partners = new Map<HastNode, HastNode>();
+  for (const twin of twins) {
+    if (!twin.ja) continue;
+    const next = (twin.parent.children ?? []).slice(twin.index + 1).find((node) => !isBlank(node));
+    const en = next && byNode.get(next);
+    if (en && !en.ja && en.on === twin.on) partners.set(twin.node, en.node);
+  }
+  const { split, openAtEnd } = twins.length > 0 ? twinSpansInSource(source) : NO_SPANS;
+  const tail = streaming && openAtEnd === 1 ? (twins.at(-1)?.node ?? null) : null;
+  const broken =
+    split || openAtEnd > (tail ? 1 : 0) || twins.some((twin) => twin.nested && twin.node !== tail);
+  return { byNode, twins, partners, tail, broken };
+}
+
+const NO_SPANS = { split: false, openAtEnd: 0 };
+
+/**
+ * Renders a tree at `level`: a pair by its threshold (its English twin in a broken message), a lone English twin always,
+ * a lone Japanese twin at its threshold and below it as its last sentence mark's translation. In a broken message a
+ * hidden Japanese twin also hides all up to the next English twin, so a split span leaves no Japanese behind.
+ */
+function renderAt(tree: HastNode, level: number, source: string, streaming: boolean) {
+  const { byNode, twins, partners, tail, broken } = readTwins(tree, source, streaming);
+  const paired = new Set(partners.values());
+  const nextEnglish = (twin: Twin) =>
+    twins.slice(twins.indexOf(twin) + 1).find((next) => !next.ja && next.on === twin.on)?.node ??
+    null;
   let hiddenUntil: HastNode | null = null;
-  const japanese = (on: number) => !broken && level >= on;
   const withChildren = (node: HastNode): HastNode => {
     if (!node.children || KEPT.has(node.tagName ?? "")) return node;
     const children: HastNode[] = [];
@@ -196,17 +210,24 @@ function renderAt(tree: HastNode, level: number, source: string) {
     node.children = children;
     return node;
   };
+  function japaneseTwin(twin: Twin): HastNode[] {
+    const node = twin.node;
+    if (partners.has(node)) return !broken && level >= twin.on ? [withChildren(node)] : [];
+    if (level >= twin.on) return [withChildren(node)];
+    if (node === tail) return [];
+    const translation = lastSentenceTranslation(node);
+    hiddenUntil = broken ? nextEnglish(twin) : null;
+    // Hiding, its children keep only an English twin an unclosed span took in, and what follows it.
+    const kept = hiddenUntil === null ? [] : (withChildren(node).children ?? []);
+    return [...(translation === "" ? [] : [{ type: "text", value: translation }]), ...kept];
+  }
   function visit(node: HastNode): HastNode[] {
-    const twin = twins.get(node);
-    if (twin?.ja) {
-      if (japanese(twin.on)) return [withChildren(node)];
-      hiddenUntil = partners.get(node) ?? null;
-      // An unclosed Japanese twin holds its English one; only that survives.
-      return hiddenUntil === null ? [] : (withChildren(node).children ?? []);
-    }
+    const twin = byNode.get(node);
+    if (twin?.ja) return japaneseTwin(twin);
     if (twin) {
       if (hiddenUntil === node) hiddenUntil = null;
-      return japanese(twin.on) ? [] : [withChildren(node)];
+      const japaneseShown = paired.has(node) && !broken && level >= twin.on;
+      return japaneseShown ? [] : [withChildren(node)];
     }
     if (hiddenUntil !== null) {
       if (!node.children || KEPT.has(node.tagName ?? "")) return [];
@@ -216,7 +237,7 @@ function renderAt(tree: HastNode, level: number, source: string) {
     const on = threshold(node);
     if (node.tagName === "abbr" && on !== null && level < on) {
       const english = node.properties?.dataEn;
-      const meaning = typeof english === "string" ? english : glossMeaning(glossTitle(node));
+      const meaning = (typeof english === "string" && english) || glossMeaning(glossTitle(node));
       if (meaning !== "") return [{ type: "text", value: meaning }];
     }
     return [withChildren(node)];
@@ -224,22 +245,60 @@ function renderAt(tree: HastNode, level: number, source: string) {
   withChildren(tree);
 }
 
+// A tag still being written at the end of a streaming reply, which would show as text until it closes.
+const PARTIAL_TAG = /<(?:\/?[A-Za-z!][^<>]*)?$/u;
+
+/** The element holding the last text outside code that isn't only whitespace. */
+function lastProseParent(node: HastNode): HastNode | null {
+  if (KEPT.has(node.tagName ?? "")) return null;
+  for (const child of [...(node.children ?? [])].reverse()) {
+    if (child.type === "text") {
+      if (isBlank(child)) continue;
+      return node;
+    }
+    const parent = lastProseParent(child);
+    if (parent) return parent;
+    if (!isBlank(child)) return null;
+  }
+  return null;
+}
+
+/** Cuts a tag still being written from the end of the reply's last text, which markdown may have split into parts. */
+function dropPartialTag(tree: HastNode) {
+  const children = lastProseParent(tree)?.children;
+  if (!children) return;
+  let last = children.length - 1;
+  while (last >= 0 && isBlank(children[last]!)) last -= 1;
+  let first = last;
+  while (first > 0 && children[first - 1]!.type === "text") first -= 1;
+  const run = children.slice(first, last + 1);
+  let cut = PARTIAL_TAG.exec(run.map((node) => node.value ?? "").join(""))?.[0].length ?? 0;
+  for (const node of run.reverse()) {
+    const value = node.value ?? "";
+    node.value = value.slice(0, Math.max(0, value.length - cut));
+    cut = Math.max(0, cut - value.length);
+  }
+}
+
 export interface ChatLevel {
   /** The chat level, from -3 (no Japanese) to 3. */
   readonly level: number;
   /** English only, which also turns glosses in messages without levels into English. */
   readonly englishOnly: boolean;
+  /** The source is a reply still streaming, whose last element may still be open. */
+  readonly streaming?: boolean;
 }
 
 /**
  * Renders a chat message at a level. A swapped word (`<abbr data-on>`) stays a gloss at or above its threshold and is
  * its English (`data-en`, else its gloss's meaning) below it; a sentence's twins (`<span data-jw="ja|en" data-on>`)
- * show the Japanese at or above it and the English below it. Markup without `data-on` renders as written, except that
- * in English only glossed words show their meaning and glossed sentences their translation, as plain text.
+ * show as `renderAt` says. Markup without a valid `data-on` (-2 to 3) renders as written, except that in English only
+ * glossed words show their meaning and glossed sentences their translation, as plain text.
  */
-export function rehypeChatLevel({ level, englishOnly }: ChatLevel) {
+export function rehypeChatLevel({ level, englishOnly, streaming = false }: ChatLevel) {
   return (tree: HastNode, file?: { value?: unknown }) => {
-    renderAt(tree, level, String(file?.value ?? ""));
+    if (streaming) dropPartialTag(tree);
+    renderAt(tree, level, String(file?.value ?? ""), streaming);
     if (englishOnly) toEnglish(tree);
   };
 }
