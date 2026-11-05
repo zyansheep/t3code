@@ -49,3 +49,15 @@ it("renders chat at the level left once English only ends, and at normal once th
     until: 0,
   });
 });
+
+it("keeps a level press made before the status was read when English only is then toggled", async () => {
+  vi.useFakeTimers({ now: NOW, toFake: ["setTimeout", "clearTimeout", "Date"] });
+  using _timers = { [Symbol.dispose]: () => void vi.useRealTimers() };
+  const environmentId = EnvironmentId.make("environment-unread");
+  const level = () => appAtomRegistry.get(chatLevelAtom(environmentId));
+  await stepAnnotationLevel(environmentId, 1);
+  expect(level()).toBe(2);
+  await setEnglishOnly(environmentId, true);
+  await setEnglishOnly(environmentId, false);
+  expect(level()).toBe(2);
+});

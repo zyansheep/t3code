@@ -252,7 +252,11 @@ export async function stepAnnotationLevel(
     const reason = failureReason(result);
     return reason === null ? null : { ok: false, reason };
   }
+  // A press before the status was read is still the collector's answer; English only is off until read.
   const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
-  if (current) setStatus(environmentId, { ...current, intensity: result.value });
+  setStatus(environmentId, {
+    english: current?.english ?? { on: false, until: 0, at: 0 },
+    intensity: result.value,
+  });
   return { ok: true, value: result.value };
 }
