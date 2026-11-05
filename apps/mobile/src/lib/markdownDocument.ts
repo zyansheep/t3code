@@ -68,7 +68,8 @@ export function decodeHtmlEntities(value: string): string {
 
 const HTML_TAG = /<!--[\s\S]*?-->|<\/?[a-z](?:[^>"']|"[^"]*"|'[^']*')*>/gi;
 
-function attribute(tag: string, name: string): string | null {
+/** An attribute of one HTML tag, entities decoded; null when the tag has none. */
+export function attribute(tag: string, name: string): string | null {
   const attributes = /([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
   for (const match of tag.matchAll(attributes)) {
     if (match[1]?.toLowerCase() === name) {
