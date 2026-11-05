@@ -8,7 +8,7 @@ import {
   AnnotationReviewCard,
   AnnotationReviewError,
   type AnnotationReviewNextInput,
-  type AnnotationReviewNextResult,
+  AnnotationReviewNextResult,
   type AnnotationStatus,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
@@ -145,14 +145,16 @@ const decodeReviewAnswer = Schema.decodeUnknownOption(
   Schema.Struct({
     ok: Schema.Boolean,
     card: Schema.optional(Schema.NullOr(AnnotationReviewCard)),
+    counts: AnnotationReviewNextResult.fields.counts,
     error: Schema.optional(Schema.String),
   }),
 );
 
 /**
  * Asks the collector at the origin of `T3CODE_ANNOTATION_EVENTS_URL` for the next word to review, with
- * `POST /v1/review/next`; `card: null` means nothing is due. Fails with a reason short enough to show on the card:
- * `not configured`, the collector's own error, its status, or `collector unreachable`.
+ * `POST /v1/review/next`, and returns its card (`null`: nothing is due now) with its counts when it sends them. Fails
+ * with a reason short enough to show: `not configured`, the collector's own error, its status, or
+ * `collector unreachable`.
  */
 export const nextAnnotationReview = Effect.fn("nextAnnotationReview")(
   function* (input: AnnotationReviewNextInput) {
@@ -164,14 +166,21 @@ export const nextAnnotationReview = Effect.fn("nextAnnotationReview")(
     });
     const client = yield* HttpClient.HttpClient;
     const request = yield* HttpClientRequest.post(url).pipe(
-      HttpClientRequest.bodyJson({ source: input.source, exclude: input.exclude }),
+      HttpClientRequest.bodyJson({
+        source: input.source,
+        exclude: input.exclude,
+        ...(input.more === undefined ? {} : { more: input.more }),
+      }),
     );
     const response = yield* client.execute(request);
     const answer = Option.getOrUndefined(
       Option.flatMap(yield* Effect.option(response.json), decodeReviewAnswer),
     );
     if (response.status === 200 && answer?.ok === true && answer.card !== undefined) {
-      return { card: answer.card } satisfies AnnotationReviewNextResult;
+      return {
+        card: answer.card,
+        ...(answer.counts === undefined ? {} : { counts: answer.counts }),
+      } satisfies AnnotationReviewNextResult;
     }
     const reason = answer?.error?.trim();
     return yield* new AnnotationReviewError({
