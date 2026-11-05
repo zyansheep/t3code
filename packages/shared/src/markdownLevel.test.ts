@@ -114,11 +114,16 @@ describe("rehypeChatLevel with malformed twins", () => {
     expect(textAt(twins("\n\n"), 1)).toBe(`${RAIN} ${RAINING}`);
   });
 
-  it("ignores a self-closing abbr, and renders an abbr left open in a finished message as written", () => {
+  it("ignores a self-closing abbr, and shows a word left open in a finished message as its English", () => {
     expect(textAt('One <abbr title="a · b"/>two.', 0)).toBe("One two.");
     const open =
       'The <abbr title="もんだい · problem" data-en="problem" data-on="1">問題 is small.';
-    expect(textAt(open, 0)).toBe("The 問題 is small.");
+    // At every level, with the rest of its block as usual.
+    for (const level of [-3, 0, 3] as const)
+      expect(textAt(open, level)).toBe("The problem is small.");
+    expect(textAt(`${open}\n\nNext <abbr title="いま · now" data-on="0">今</abbr>.`, 0)).toBe(
+      "The problem is small. Next 今.",
+    );
     // Still arriving, it follows its threshold, as plain text until it closes.
     expect(textAt(open, 0, { streaming: true })).toBe("The problem");
     expect(textAt(open, 1, { streaming: true })).toBe("The 問題 is small.");
