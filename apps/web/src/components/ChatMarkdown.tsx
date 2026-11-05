@@ -102,7 +102,6 @@ import { parseComposerContextHref } from "@t3tools/shared/composerContextReferen
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import { AssistantCitationEmbed } from "./chat/AssistantCitationChip";
 import { MarkdownThreadLink } from "./chat/MarkdownThreadLink";
-import { GlossPopoverBody, useGlossReview } from "./chat/GlossReview";
 import { mathKind } from "@t3tools/shared/markdownMath";
 import remarkMath from "remark-math";
 import {
@@ -1962,7 +1961,7 @@ function ChatMarkdown({
     componentState.environmentId === null
       ? null
       : (primaryEnvironmentId ?? componentState.environmentId);
-  // In English only, glosses render as plain English, so nothing in the message is Japanese to report on or review.
+  // In English only, glosses render as plain English, so nothing in the message is Japanese to report on.
   const englishOnly = useAtomValue(englishOnlyAtom(hasAbbreviations ? environmentId : null));
   const glossed = hasAbbreviations && !englishOnly;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the collector's English-only state for this message's server loaded
@@ -1993,15 +1992,6 @@ function ChatMarkdown({
     const item = abbreviationInteraction(container, opened, Date.now(), text);
     if (item) void reportAnnotations({ environmentId, input: { items: [item] } });
   };
-  const review = useGlossReview({
-    environmentId: glossed ? environmentId : null,
-    container: markdownRef,
-    popover: abbreviationPopover,
-    report: (item) => {
-      if (environmentId) void reportAnnotations({ environmentId, input: { items: [item] } });
-    },
-  });
-  const popoverTrigger = useRef<Element | null>(null);
   // Hover is a peek and a click, tap or Enter pins the expansion; a focus-only open is not counted, since scripts
   // and keyboard navigation move focus without the reader asking for the meaning.
   const handleAbbreviationOpenChange = (
@@ -2009,11 +1999,6 @@ function ChatMarkdown({
     reason: string,
     trigger: Element | undefined,
   ) => {
-    // A review lasts while its popover stays open on the same gloss.
-    if (!open || (trigger && popoverTrigger.current && popoverTrigger.current !== trigger)) {
-      review.end();
-    }
-    popoverTrigger.current = open ? (trigger ?? popoverTrigger.current) : null;
     if (openAbbreviation.current && (!open || openAbbreviation.current.trigger !== trigger)) {
       finishAbbreviation();
     }
@@ -2069,7 +2054,7 @@ function ChatMarkdown({
         >
           {({ payload }) => (
             <PopoverPopup tooltipStyle side="top" initialFocus={false}>
-              <GlossPopoverBody gloss={payload ?? ""} review={review} />
+              {payload}
             </PopoverPopup>
           )}
         </Popover>
