@@ -5,6 +5,7 @@ const DAY = 24 * HOUR;
 const MONTH = 30 * DAY;
 const YEAR = 365 * DAY;
 
+// A whole number prints without ".0", as Anki prints "1mo" and "2y".
 const tenths = (value: number) => String(Math.round(value * 10) / 10);
 
 /**
