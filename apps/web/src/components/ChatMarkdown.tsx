@@ -2275,7 +2275,6 @@ function ChatMarkdown({
   const reportReading = useEffectEvent((items: ReadonlyArray<AnnotationReading>) => {
     if (environmentId) void reportAnnotations({ environmentId, input: { items: [...items] } });
   });
-  const isStreaming = componentState.isStreaming;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the rendered message's DOM with the shared reading listeners until it unmounts or changes
   useEffect(() => {
     const container = markdownRef.current;

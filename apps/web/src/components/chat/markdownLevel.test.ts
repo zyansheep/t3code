@@ -54,10 +54,10 @@ const MESSAGE = `The ${WORD} is small. ${TWINS} We stay in.`;
 describe("rehypeChatLevel", () => {
   it("shows a swapped word as its gloss at or above its threshold and as its English below", () => {
     expect(html(`The ${WORD} is small.`, 1)).toBe(
-      '<p>The <abbr data-en="problem" data-on="1" data-markdown-title="もんだい · problem">問題</abbr> is small.</p>',
+      '<p dir="ltr">The <abbr data-en="problem" data-on="1" data-markdown-title="もんだい · problem">問題</abbr> is small.</p>',
     );
     expect(html(`The ${WORD} is small.`, 3)).toContain(">問題</abbr>");
-    expect(html(`The ${WORD} is small.`, 0)).toBe("<p>The problem is small.</p>");
+    expect(html(`The ${WORD} is small.`, 0)).toBe('<p dir="ltr">The problem is small.</p>');
   });
 
   it("shows one twin of a sentence: the Japanese at or above its threshold, else the English", () => {
@@ -94,10 +94,10 @@ describe("rehypeChatLevel", () => {
     const source =
       '<span data-jw="ja" data-on="0"><abbr title="あめ · rain">雨</abbr>です<abbr title="It is rain.">。</abbr></span><span data-jw="en" data-on="0">It is **rain**, see `rain.ts`.</span>';
     expect(html(source, 0)).toBe(
-      '<p><span data-jw="ja" data-on="0"><abbr data-markdown-title="あめ · rain">雨</abbr>です<abbr data-markdown-title="It is rain.">。</abbr></span></p>',
+      '<p dir="ltr"><span data-jw="ja" data-on="0"><abbr data-markdown-title="あめ · rain">雨</abbr>です<abbr data-markdown-title="It is rain.">。</abbr></span></p>',
     );
     expect(html(source, -1)).toBe(
-      '<p><span data-jw="en" data-on="0">It is <strong>rain</strong>, see <code data-inline-code="">rain.ts</code>.</span></p>',
+      '<p dir="ltr"><span data-jw="en" data-on="0">It is <strong>rain</strong>, see <span class="has-[[data-slot=context-chip-label]]:whitespace-nowrap"><code data-inline-code="" dir="ltr">rain.ts</code>.</span></span></p>',
     );
   });
 
@@ -151,7 +151,7 @@ describe("rehypeChatLevel", () => {
 
   it("shows a swapped word without data-en as its gloss's meaning below its threshold", () => {
     const source = 'The <abbr title="もんだい · problem / issue" data-on="1">問題</abbr> is small.';
-    expect(html(source, 0)).toBe("<p>The problem is small.</p>");
+    expect(html(source, 0)).toBe('<p dir="ltr">The problem is small.</p>');
     expect(textAt(source, 1)).toBe("The 問題 is small.");
   });
 
@@ -159,7 +159,7 @@ describe("rehypeChatLevel", () => {
     const source =
       '<span data-jw="ja" data-on="x" onclick="alert(1)">今日</span><span data-jw="zz" data-on="1">today</span>';
     expect(html(source, 0)).toBe(
-      '<p><span data-jw="ja">今日</span><span data-on="1">today</span></p>',
+      '<p dir="ltr"><span data-jw="ja">今日</span><span data-on="1">today</span></p>',
     );
   });
 });

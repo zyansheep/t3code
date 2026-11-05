@@ -184,10 +184,17 @@ export const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
       "dataLeadingWhitespace",
       ["dataJw", "ja", "en"],
       ["dataOn", LEVEL_THRESHOLD],
+      ["dataUnclosed", "end", "block"],
+      ["dataApart", ""],
     ],
     div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
     a: [...(defaultSchema.attributes?.a ?? []), "dataPullRequestAutolink"],
-    abbr: ["dataMarkdownTitle", "dataEn", ["dataOn", LEVEL_THRESHOLD]],
+    abbr: [
+      "dataMarkdownTitle",
+      "dataEn",
+      ["dataOn", LEVEL_THRESHOLD],
+      ["dataUnclosed", "end", "block"],
+    ],
     img: [
       ...(defaultSchema.attributes?.img ?? []),
       "dataDarkSrc",
