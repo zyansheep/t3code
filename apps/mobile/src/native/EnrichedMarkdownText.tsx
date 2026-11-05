@@ -19,7 +19,7 @@ import {
   isGlossHref,
   markdownWithGlosses,
 } from "../lib/markdownGlosses";
-import { markdownAtLevel, markdownEnglishOnly } from "../lib/markdownLevels";
+import { markdownAtLevel, markdownEnglishOnly, withoutPartialTag } from "../lib/markdownLevels";
 import { isValidElement, useMemo, useState, type ReactNode } from "react";
 import { Platform, Share, StyleSheet, useWindowDimensions, View } from "react-native";
 import {
@@ -178,9 +178,12 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   const { englishOnly, japaneseLevel, streaming } = props;
   const { markdown, fileHrefs } = useMemo(() => {
     // The level picks from the message as written, whose attributes markdownWithHtml drops.
+    // A tag half arrived at the end of a streaming message is hidden, level markup or none.
     const source =
       japaneseLevel === undefined
-        ? props.markdown
+        ? streaming
+          ? withoutPartialTag(props.markdown)
+          : props.markdown
         : markdownAtLevel(props.markdown, japaneseLevel, streaming);
     const shown = englishOnly ? markdownEnglishOnly : (content: string) => content;
     if (!fileEmbedLabel) {
