@@ -1,3 +1,4 @@
+import type { EnvironmentId } from "@t3tools/contracts";
 import {
   PanelBottomIcon,
   PanelRightIcon,
@@ -10,6 +11,7 @@ import { memo, type ReactNode, useLayoutEffect, useRef } from "react";
 import { cn } from "~/lib/utils";
 
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
+import { ReviewPanelToggle } from "../review/ReviewPanelToggle";
 import { PopoverCreateHandle, PopoverTrigger } from "../ui/popover";
 import { useMobileSidebarSheetMounted } from "../ui/sidebar";
 import { Toggle } from "../ui/toggle";
@@ -19,6 +21,12 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 const THREAD_PANEL_HEADER_INSET_PX = 12;
 
 export interface PanelLayoutControlsProps {
+  /** Vendored: the review panel for a language-learning tool's words, through this environment's collector. */
+  reviewEnvironmentId?: EnvironmentId;
+  reviewOpen?: boolean;
+  reviewShortcutLabel?: string | null;
+  onToggleReview?: () => void;
+  showReviewControl?: boolean;
   showThreadPanelControl?: boolean;
   showTerminalControl?: boolean;
   showRightPanelControl?: boolean;
@@ -39,6 +47,11 @@ export interface PanelLayoutControlsProps {
 }
 
 export const PanelLayoutControls = memo(function PanelLayoutControls({
+  reviewEnvironmentId,
+  reviewOpen = false,
+  reviewShortcutLabel = null,
+  onToggleReview,
+  showReviewControl = true,
   showThreadPanelControl = true,
   showTerminalControl = true,
   showRightPanelControl = true,
@@ -90,6 +103,14 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
       data-panel-layout-controls
     >
+      {showReviewControl && reviewEnvironmentId && onToggleReview ? (
+        <ReviewPanelToggle
+          environmentId={reviewEnvironmentId}
+          open={reviewOpen}
+          shortcutLabel={reviewShortcutLabel}
+          onToggle={onToggleReview}
+        />
+      ) : null}
       {showThreadPanelControl ? threadPanelControl : null}
       {showTerminalControl ? (
         <Tooltip>
@@ -184,7 +205,12 @@ export function ThreadPanelHeaderControl(props: PanelLayoutControlsProps) {
       )}
       data-workspace-titlebar-controls
     >
-      <PanelLayoutControls {...props} showTerminalControl={false} showRightPanelControl={false} />
+      <PanelLayoutControls
+        {...props}
+        showReviewControl={false}
+        showTerminalControl={false}
+        showRightPanelControl={false}
+      />
     </div>
   );
 }

@@ -386,6 +386,7 @@ export function commandLabel(command: KeybindingCommand): string {
   if (command === "preview.focusUrl") return "Preview: Focus URL";
   if (command === "preview.find") return "Preview: Find on Page";
   if (command === "annotations.englishOnly") return "Chat: English Only";
+  if (command === "annotations.review") return "Toggle Review Panel";
   const raw = String(command);
   if (raw.startsWith("script.") && raw.endsWith(".run")) {
     return `Run Script: ${titleCaseCommandSegment(raw.slice("script.".length, -".run".length))}`;

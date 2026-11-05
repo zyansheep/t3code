@@ -115,6 +115,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "usage.period.month",
   "usage.period.quarter",
   "annotations.englishOnly",
+  "annotations.review",
   ...MODEL_PICKER_KEYBINDING_COMMANDS,
   ...THREAD_KEYBINDING_COMMANDS,
 ] as const;
