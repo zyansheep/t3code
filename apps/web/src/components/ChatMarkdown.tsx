@@ -2227,6 +2227,9 @@ function ChatMarkdown({
   };
   const markdown = wordsOptions(extensions, markdownFlags);
   const blocks = streamingBlocks ?? [text];
+  // Only the last block of a streaming reply is still being written; a tag still arriving at its end is cut, whether
+  // or not the reply has levels yet.
+  const isWriting = (index: number) => props.isStreaming === true && index === blocks.length - 1;
   // Only messages with raw <abbr> markup mount the shared expansion popover.
   const hasAbbreviations = parseRawHtml && /<abbr\b/i.test(text);
   // A message that carries its Japanese at every level renders at the reader's current one.
@@ -2253,14 +2256,13 @@ function ChatMarkdown({
   const reportedLevel = hasLevels ? level : undefined;
   const glossed = hasAbbreviations && !englishOnly;
   const blockMarkdown = (index: number) =>
-    (annotated && englishOnly) || hasLevels
+    parseRawHtml && ((annotated && englishOnly) || hasLevels || isWriting(index))
       ? wordsOptions(extensions, {
           ...markdownFlags,
           transform: levelTransform(
-            englishOnly ? -3 : level,
+            englishOnly ? -3 : hasLevels ? level : 0,
             englishOnly,
-            // Only the last block of a streaming reply is still being written.
-            props.isStreaming === true && index === blocks.length - 1,
+            isWriting(index),
           ),
         })
       : markdown;
