@@ -1,9 +1,15 @@
-import type {
-  AnnotationInteraction,
-  AnnotationReviewNextResult,
-  EnvironmentId,
+import {
+  type AnnotationInteraction,
+  AnnotationReportError,
+  type AnnotationReviewNextResult,
+  type EnvironmentId,
 } from "@t3tools/contracts";
-import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  isAtomCommandInterrupted,
+  runAtomCommand,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -20,7 +26,26 @@ export const reviewCountsAtom = Atom.family((_environmentId: EnvironmentId) =>
   ),
 );
 
-/** Asks the collector for the next card through `environmentId`'s server; a `peek` asks for the counts alone. */
+const MAX_RELEASE = 20;
+/** Cards served to this client but never shown, per environment, to name in the next request. */
+const unshown = new Map<EnvironmentId, Set<string>>();
+
+/** Hands cards served but never shown back to the collector with the next request, so it can serve them again. */
+export function releaseReviewCards(environmentId: EnvironmentId, ids: ReadonlyArray<string>): void {
+  if (ids.length === 0) return;
+  const pending = unshown.get(environmentId) ?? new Set<string>();
+  for (const id of ids) pending.add(id);
+  // The oldest go first once there are more than one request can name.
+  for (const id of [...pending].slice(0, Math.max(0, pending.size - MAX_RELEASE))) {
+    pending.delete(id);
+  }
+  unshown.set(environmentId, pending);
+}
+
+/**
+ * Asks the collector for the next card through `environmentId`'s server, handing back the cards released since the
+ * last answer; a `peek` asks for the counts alone.
+ */
 export async function fetchReviewCard(
   environmentId: EnvironmentId,
   input: {
@@ -29,6 +54,7 @@ export async function fetchReviewCard(
     readonly peek?: boolean;
   },
 ): Promise<AnnotationReviewNextResult | { readonly detail: string }> {
+  const release = [...(unshown.get(environmentId) ?? [])];
   const result = await runAtomCommand(
     appAtomRegistry,
     nextAnnotationReview,
@@ -39,25 +65,40 @@ export async function fetchReviewCard(
         exclude: [...input.exclude],
         ...(input.more ? { more: true } : {}),
         ...(input.peek ? { peek: true } : {}),
+        ...(release.length > 0 ? { release } : {}),
       },
     },
     QUIET,
   );
-  if (result._tag === "Success") return result.value;
+  if (result._tag === "Success") {
+    const pending = unshown.get(environmentId);
+    for (const id of release) pending?.delete(id);
+    return result.value;
+  }
   const error = squashAtomCommandFailure(result);
   return { detail: error instanceof Error && error.message ? error.message : "request failed" };
 }
 
-export function reportReview(
+const isReportError = Schema.is(AnnotationReportError);
+
+/**
+ * Sends one review item: `stored` once the collector has it, `rejected` when it refused it (a resend would not help),
+ * `failed` when it may not have arrived and can be sent again under the same uid.
+ */
+export async function reportReview(
   environmentId: EnvironmentId,
   item: Extract<AnnotationInteraction, { kind: "review" }>,
-) {
-  return runAtomCommand(
+): Promise<"stored" | "rejected" | "failed"> {
+  const result = await runAtomCommand(
     appAtomRegistry,
     reportAnnotationInteractions,
     { environmentId, input: { items: [item] } },
     QUIET,
   );
+  if (result._tag === "Success") return "stored";
+  if (isAtomCommandInterrupted(result)) return "failed";
+  const error = squashAtomCommandFailure(result);
+  return isReportError(error) && !error.retryable ? "rejected" : "failed";
 }
 
 export function setReviewCounts(environmentId: EnvironmentId, counts: ReviewCounts | null): void {

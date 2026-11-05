@@ -56,12 +56,18 @@ interface Ask {
   readonly answer: (value: ReviewFetched) => void;
 }
 
-/** A session against a fake collector whose answers the test gives, on a clock it moves. */
-function harness(options: { holdReports?: boolean } = {}) {
+type Outcome = "stored" | "rejected" | "failed";
+
+/**
+ * A session against a fake collector whose answers the test gives, on a clock it moves. Reports are stored at once
+ * (or with the next of `outcomes`), or with `holdReports` when the test lands them.
+ */
+function harness(options: { holdReports?: boolean; outcomes?: Outcome[] } = {}) {
   const asks: Ask[] = [];
   const askWaiters = new Map<number, (ask: Ask) => void>();
   const reports: ReviewItem[] = [];
-  const landed: Array<() => void> = [];
+  const released: string[] = [];
+  const landed: Array<(outcome?: Outcome) => void> = [];
   const events: string[] = [];
   let state: ReviewState | null = null;
   const changeWaiters: Array<(state: ReviewState) => void> = [];
@@ -77,14 +83,15 @@ function harness(options: { holdReports?: boolean } = {}) {
       }),
     report: (item) => {
       reports.push(item);
-      if (!options.holdReports) return Promise.resolve();
-      return new Promise<void>((resolve) =>
-        landed.push(() => {
+      if (!options.holdReports) return Promise.resolve(options.outcomes?.shift() ?? "stored");
+      return new Promise<Outcome>((resolve) =>
+        landed.push((outcome = "stored") => {
           events.push("landed");
-          resolve();
+          resolve(outcome);
         }),
       );
     },
+    release: (ids) => released.push(...ids),
     onChange: (next) => {
       state = next;
       for (const waiter of changeWaiters.splice(0)) waiter(next);
@@ -96,6 +103,7 @@ function harness(options: { holdReports?: boolean } = {}) {
   return {
     session,
     reports,
+    released,
     landed,
     events,
     state: () => state!,
@@ -219,15 +227,89 @@ describe("ReviewSession", () => {
         uid: "uid-1",
       },
     ]);
+    // The next card, still on its way, was served but will never be shown: it is handed back.
     prefetch.answer({ card: B, counts: COUNTS });
+    await vi.waitFor(() => expect(h.released).toEqual(["b"]));
 
     h.session.start();
     expect((await h.ask(2)).input).toEqual({ exclude: [], more: false });
     expect(h.state().view).toEqual({ phase: "loading" });
-    // A card never painted was never seen, so leaving it reports nothing.
+    // A card never painted was never seen, so leaving it reports nothing and hands it back, with the next one.
     await h.answer(await h.ask(2), { card: B, counts: COUNTS });
+    await h.answer(await h.ask(3), { card: A, counts: COUNTS });
     h.session.leave();
     expect(h.reports).toHaveLength(1);
+    expect(h.released).toEqual(["b", "b", "a"]);
+  });
+
+  it("caps the times it reports at a day", async () => {
+    const h = harness();
+    await showFirst(h);
+    h.advance(30 * 3_600_000);
+    h.session.reveal();
+    h.advance(3 * 3_600_000);
+    h.session.grade(2);
+    expect(h.reports[0]).toMatchObject({
+      revealMs: 86_400_000,
+      shownMs: 86_400_000,
+      gradeMs: 86_400_000,
+    });
+  });
+
+  it("sends a grade that may not have arrived again, under its uid, excluding its card until it is stored", async () => {
+    using _timers = fakeTimers();
+    const h = harness({ outcomes: ["failed", "failed", "stored"] });
+    await showFirst(h);
+    await h.answer(await h.ask(1), { card: null, counts: COUNTS });
+    h.session.reveal();
+    h.session.grade(3);
+    // The next card is asked for after the first answer, without the card whose grade is not stored.
+    expect((await h.ask(2)).input).toEqual({ exclude: ["a"], more: false });
+    expect(h.reports).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(h.reports).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.reports).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.reports).toHaveLength(3);
+    expect(new Set(h.reports.map((item) => item.uid))).toEqual(new Set(["uid-1"]));
+    expect(h.reports[2]).toEqual(h.reports[0]);
+
+    // Stored now, so it is no longer held back, and nothing is sent again.
+    await h.answer(await h.ask(2), { card: B, counts: COUNTS });
+    expect((await h.ask(3)).input).toEqual({ exclude: ["b"], more: false });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.reports).toHaveLength(3);
+  });
+
+  it("does not send a rejected report again", async () => {
+    using _timers = fakeTimers();
+    const h = harness({ outcomes: ["rejected"] });
+    await showFirst(h);
+    h.session.reveal();
+    h.session.grade(3);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.reports).toHaveLength(1);
+    // The collector still has the card due, so it may serve it again.
+    expect((await h.ask(1)).input).toEqual({ exclude: [], more: false });
+  });
+
+  it("works out which cards to exclude when the request goes out, not when it is made", async () => {
+    const h = harness({ holdReports: true });
+    await showFirst(h);
+    await h.answer(await h.ask(1), { card: B, counts: COUNTS });
+    h.session.reveal();
+    h.session.grade(3);
+    // B is on screen, and the request for the card after it waits for the first grade to land.
+    const shownB = h.state().view;
+    if (shownB.phase === "card") h.session.painted(shownB.uid);
+    h.session.reveal();
+    h.session.grade(4);
+    h.landed[0]!();
+    h.landed[1]!();
+    // Made while B was on screen, but sent once B was graded and stored, so B is not held back.
+    expect((await h.ask(2)).input).toEqual({ exclude: [], more: false });
   });
 
   it("is done when nothing is due, and Review more asks past the new-card limit from then on", async () => {
