@@ -25,10 +25,18 @@ const AnnotationEventsUrl = Config.String("T3CODE_ANNOTATION_EVENTS_URL").pipe(
 
 const isReportError = Schema.is(AnnotationReportError);
 const decodeReportAnswer = Schema.decodeUnknownOption(
-  Schema.Struct({ rejected: Schema.optional(Schema.Finite) }),
+  Schema.Struct({
+    rejected: Schema.optional(Schema.Finite),
+    reasons: Schema.optional(
+      Schema.Array(Schema.Struct({ item: Schema.Int, error: Schema.String })),
+    ),
+  }),
 );
 
-/** Posts `items` to the collector; fails when it cannot be reached, fails, or rejects any of them. */
+/**
+ * Posts `items` to the collector; fails when it cannot be reached or fails, or names the review items it rejected (by
+ * its reasons; one that sends none rejected them all). Other items it rejects or ignores are best effort.
+ */
 const postInteractions = Effect.fn("postInteractions")(
   function* (url: string, input: AnnotationInteractionsReportInput) {
     const client = yield* HttpClient.HttpClient;
@@ -45,11 +53,17 @@ const postInteractions = Effect.fn("postInteractions")(
     const answer = Option.getOrUndefined(
       Option.flatMap(yield* Effect.option(response.json), decodeReportAnswer),
     );
-    const rejected = answer?.rejected ?? 0;
-    if (rejected > 0) {
+    const reviews = input.items.flatMap((item, index) => (item.kind === "review" ? [index] : []));
+    const rejected = answer?.reasons
+      ? answer.reasons.filter((reason) => reviews.includes(reason.item))
+      : (answer?.rejected ?? 0) > 0
+        ? reviews.map((item) => ({ item, error: "rejected" }))
+        : [];
+    if (rejected.length > 0) {
       return yield* new AnnotationReportError({
-        detail: `collector rejected ${rejected} of ${input.items.length}`,
+        detail: `collector rejected ${rejected.length} of ${input.items.length}: ${rejected[0]!.error}`,
         retryable: false,
+        rejected,
       });
     }
   },
