@@ -260,6 +260,7 @@ import { environmentThreadShells, threadEnvironment } from "../../state/threads"
 import { ThreadWorkflowOpening, useWorkflowOpening } from "./thread-workflow-opening";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
+import { hasLevelMarkup } from "../../lib/markdownLevels";
 import {
   chatJapaneseLevelAtom,
   englishOnlyAtom,
@@ -1168,13 +1169,17 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
+  /** Still coming in, so level markup left open at its end follows its threshold. */
+  readonly streaming?: boolean;
 }) {
   const models = useModelMentions(props.environmentId, props.markdown);
   const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
   const threadIcons = useThreadChipIcons(props.environmentId, liveMarkdown);
   const { environmentId, glossMessageText } = props;
   const englishOnly = useAtomValue(englishOnlyAtom(environmentId));
-  const japaneseLevel = useAtomValue(chatJapaneseLevelAtom(environmentId));
+  const chatLevel = useAtomValue(chatJapaneseLevelAtom(environmentId));
+  // Only a message with level markup renders, and reports its opens, by level, as the desktop does.
+  const japaneseLevel = hasLevelMarkup(props.markdown) ? chatLevel : undefined;
   // Words shown in English are not glosses to open; a word below the level is no gloss at all.
   const onGlossOpen = (word: string, level: number | undefined) => {
     if (glossMessageText !== undefined && !englishOnly) {
@@ -1202,6 +1207,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
         models={models}
         onGlossOpen={onGlossOpen}
         japaneseLevel={japaneseLevel}
+        streaming={props.streaming === true}
         englishOnly={englishOnly}
       />
     </>
@@ -1227,7 +1233,8 @@ function AssistantMarkdownBlocks(props: {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
   readonly models: ReturnType<typeof useModelMentions>;
   readonly onGlossOpen: (word: string, level: number | undefined) => void;
-  readonly japaneseLevel: number;
+  readonly japaneseLevel: number | undefined;
+  readonly streaming: boolean;
   readonly englishOnly: boolean;
 }) {
   const blocks = useMemo(
@@ -1274,6 +1281,7 @@ function AssistantMarkdownBlocks(props: {
           renderImage={props.renderImage}
           onGlossOpen={props.onGlossOpen}
           japaneseLevel={props.japaneseLevel}
+          streaming={props.streaming}
           englishOnly={props.englishOnly}
         />
       );
@@ -2311,6 +2319,7 @@ function renderFeedEntry(
             <AssistantMarkdownContent
               markdown={renderedText}
               glossMessageText={message.role === "assistant" ? message.text : undefined}
+              streaming={message.streaming === true}
               environmentId={props.environmentId}
               markdownStyles={styles}
               linkHandlers={props.markdownLinkHandlers}
