@@ -1,16 +1,11 @@
 /**
  * Glossed words in chat: `<abbr title="reading · meaning">word</abbr>`. The native renderer has no
  * tooltips, so markdownWithHtml turns each one into a link to `t3-gloss:<title>`, and a tap shows
- * the title in parentheses after the word until the next tap on it. The parentheses can end in a
- * wedge, a `t3-review:` link that opens the flashcards.
+ * the title in parentheses after the word until the next tap on it.
  */
 
 const GLOSS_SCHEME = "t3-gloss:";
 export const GLOSS_LINK_PATTERN = `^${GLOSS_SCHEME}`;
-const REVIEW_SCHEME = "t3-review:";
-export const REVIEW_LINK_PATTERN = `^${REVIEW_SCHEME}`;
-/** Stemless and in every font; drawn as a padded pill so it is easy to hit. */
-export const REVIEW_WEDGE = "›";
 const GLOSS_DESTINATION = /\]\(<t3-gloss:([^>/]*)>\)/g;
 
 export function glossHref(title: string | null | undefined): string | undefined {
@@ -20,10 +15,6 @@ export function glossHref(title: string | null | undefined): string | undefined 
 
 export function isGlossHref(url: string): boolean {
   return url.startsWith(GLOSS_SCHEME);
-}
-
-export function isReviewHref(url: string): boolean {
-  return url.startsWith(REVIEW_SCHEME);
 }
 
 /** The occurrence a numbered gloss link points to, and its title. */
@@ -47,13 +38,8 @@ function escapeMarkdown(text: string): string {
  * Numbers each gloss link in order, so a tap names one occurrence, and writes the title of each
  * expanded occurrence after its word. The opening "(" keeps the emphasis delimiters flanking text
  * on both sides, so a word written right after the gloss can't stop the emphasis from closing.
- * With `reviewWedge`, an expanded title ends in the wedge, inside the closing ")".
  */
-export function markdownWithGlosses(
-  markdown: string,
-  expanded: ReadonlySet<number>,
-  options: { readonly reviewWedge?: boolean } = {},
-): string {
+export function markdownWithGlosses(markdown: string, expanded: ReadonlySet<number>): string {
   if (!hasGlossLinks(markdown)) return markdown;
   let index = 0;
   return markdown.replace(GLOSS_DESTINATION, (_, encoded: string) => {
@@ -66,8 +52,7 @@ export function markdownWithGlosses(
     } catch {
       // Left encoded: still readable.
     }
-    const wedge = options.reviewWedge ? ` [${REVIEW_WEDGE}](<${REVIEW_SCHEME}${n}>)` : "";
-    return `${link} (*${escapeMarkdown(title)}*${wedge})`;
+    return `${link} (*${escapeMarkdown(title)}*)`;
   });
 }
 

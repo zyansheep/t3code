@@ -2,7 +2,7 @@
  * Words tapped open on the phone, and nothing else: it has no line positions or read depth, and the collector reads any
  * listed but unopened word as seen and not looked up. So each word gets its own `phone-` view whose context lists only
  * that word, sent without a word count, which the collector then treats as an opened-only episode, never a message read.
- * The same queue carries the review cards of the flashcards (lib/reviewSession.ts).
+ * The same queue carries the review screen's items (lib/reviewSession.ts).
  */
 import type { AnnotationInteraction, AnnotationOpen } from "@t3tools/contracts";
 import { ANNOTATION_REPORT_MAX_ITEMS } from "@t3tools/contracts";
