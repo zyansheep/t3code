@@ -316,7 +316,11 @@ import {
 import { ThreadWorkflowOpening, useWorkflowOpening } from "./thread-workflow-opening";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
-import { englishOnlyAtom, showGlossedMessage } from "../../state/chat-japanese-view";
+import {
+  chatJapaneseLevelAtom,
+  englishOnlyAtom,
+  showGlossedMessage,
+} from "../../state/chat-japanese-view";
 import {
   fileRoutePathSegments,
   isAbsolutePath,
@@ -1310,9 +1314,14 @@ function ArtifactTemplateCard(props: {
 }
 
 // Loaded on the first tap: reporting is no reason for the feed to load the connection runtime.
-function reportGlossOpen(environmentId: EnvironmentId, messageText: string, word: string) {
+function reportGlossOpen(
+  environmentId: EnvironmentId,
+  messageText: string,
+  word: string,
+  level: number | undefined,
+) {
   void import("../../state/gloss-opens")
-    .then((reports) => reports.reportGlossOpen({ environmentId, messageText, word }))
+    .then((reports) => reports.reportGlossOpen({ environmentId, messageText, word, level }))
     .catch(() => undefined);
 }
 
@@ -1361,10 +1370,11 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   const onImagePress = props.linkHandlers.onImagePress;
   const { environmentId, glossMessageText } = props;
   const englishOnly = useAtomValue(englishOnlyAtom(environmentId));
-  // Words shown in English are not glosses to open.
-  const onGlossOpen = (word: string) => {
+  const japaneseLevel = useAtomValue(chatJapaneseLevelAtom(environmentId));
+  // Words shown in English are not glosses to open; a word below the level is no gloss at all.
+  const onGlossOpen = (word: string, level: number | undefined) => {
     if (glossMessageText !== undefined && !englishOnly) {
-      reportGlossOpen(environmentId, glossMessageText, word);
+      reportGlossOpen(environmentId, glossMessageText, word, level);
     }
   };
   const linkHandlers: MarkdownLinkHandlers = {
@@ -1417,6 +1427,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
         skills={props.skills}
         models={models}
         onGlossOpen={onGlossOpen}
+        japaneseLevel={japaneseLevel}
         englishOnly={englishOnly}
       />
       {quoteChoices.length > 0 && props.onCiteAssistantText ? (
@@ -1469,7 +1480,8 @@ function AssistantMarkdownBlocks(props: {
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
   readonly models: ReturnType<typeof useModelMentions>;
-  readonly onGlossOpen: (word: string) => void;
+  readonly onGlossOpen: (word: string, level: number | undefined) => void;
+  readonly japaneseLevel: number;
   readonly englishOnly: boolean;
 }) {
   const m = useMessages();
@@ -1537,6 +1549,7 @@ function AssistantMarkdownBlocks(props: {
           {...props.linkHandlers}
           renderImage={props.renderImage}
           onGlossOpen={props.onGlossOpen}
+          japaneseLevel={props.japaneseLevel}
           englishOnly={props.englishOnly}
         />
       );

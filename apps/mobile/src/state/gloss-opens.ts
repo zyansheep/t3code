@@ -137,11 +137,15 @@ export function glossContextsOnScreen(): Array<{ view: string; context: string }
   return glossContextsOf(glossedMessagesOnScreen().map(glossContextId), openedViews);
 }
 
-/** Reports a word tapped open. Never throws and never waits: a failed report must not touch the UI. */
+/**
+ * Reports a word tapped open in a message rendered at `level`. Never throws and never waits: a failed report must not
+ * touch the UI.
+ */
 export function reportGlossOpen(input: {
   readonly environmentId: EnvironmentId;
   readonly messageText: string;
   readonly word: string;
+  readonly level?: number | undefined;
 }): void {
   try {
     const at = Date.now();
@@ -153,6 +157,7 @@ export function reportGlossOpen(input: {
       messageText: input.messageText,
       word: input.word,
       at,
+      level: input.level,
     });
     if (item === null) return;
     const views = openedViews.get(item.context) ?? new Set<string>();

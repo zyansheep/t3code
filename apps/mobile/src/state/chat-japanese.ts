@@ -50,6 +50,7 @@ interface Watched {
   inFlight: boolean;
   attemptedAt: number;
   expiry: ReturnType<typeof setTimeout> | null;
+  levelExpiry: ReturnType<typeof setTimeout> | null;
 }
 
 const watched = new Map<EnvironmentId, Watched>();
@@ -58,17 +59,39 @@ let stopWakeups: (() => void) | undefined;
 function entry(environmentId: EnvironmentId): Watched {
   let watch = watched.get(environmentId);
   if (!watch) {
-    watch = { settledAt: 0, inFlight: false, attemptedAt: 0, expiry: null };
+    watch = { settledAt: 0, inFlight: false, attemptedAt: 0, expiry: null, levelExpiry: null };
     watched.set(environmentId, watch);
   }
   return watch;
 }
 
-/** Stores a status and turns English only off locally when it ends, without waiting for the next refresh. */
+/**
+ * Stores a status and, without waiting for the next refresh, turns English only off and the level back to normal
+ * locally when they end, so chat renders as the collector has it.
+ */
 function setStatus(environmentId: EnvironmentId, status: AnnotationStatus | null) {
   const watch = entry(environmentId);
   if (watch.expiry) clearTimeout(watch.expiry);
+  if (watch.levelExpiry) clearTimeout(watch.levelExpiry);
   watch.expiry = null;
+  watch.levelExpiry = null;
+  const intensity = status?.intensity;
+  if (status && intensity && intensity.level !== 0 && intensity.until > 0) {
+    const left = intensity.until - Date.now();
+    if (left <= 0) {
+      status = { ...status, intensity: { level: 0, until: 0 } };
+    } else {
+      watch.levelExpiry = setTimeout(
+        () => {
+          watch.levelExpiry = null;
+          const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
+          if (current?.intensity.until !== intensity.until) return;
+          setStatus(environmentId, { ...current, intensity: { level: 0, until: 0 } });
+        },
+        Math.min(left, MAX_TIMEOUT_MS),
+      );
+    }
+  }
   const english = status?.english;
   if (status && english?.on && english.until > 0) {
     const left = english.until - Date.now();
