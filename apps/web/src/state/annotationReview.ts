@@ -20,10 +20,14 @@ export const reviewCountsAtom = Atom.family((_environmentId: EnvironmentId) =>
   ),
 );
 
-/** Asks the collector for the next card through `environmentId`'s server. */
+/** Asks the collector for the next card through `environmentId`'s server; a `peek` asks for the counts alone. */
 export async function fetchReviewCard(
   environmentId: EnvironmentId,
-  input: { readonly exclude: ReadonlyArray<string>; readonly more: boolean },
+  input: {
+    readonly exclude: ReadonlyArray<string>;
+    readonly more: boolean;
+    readonly peek?: boolean;
+  },
 ): Promise<AnnotationReviewNextResult | { readonly detail: string }> {
   const result = await runAtomCommand(
     appAtomRegistry,
@@ -34,6 +38,7 @@ export async function fetchReviewCard(
         source: "desktop",
         exclude: [...input.exclude],
         ...(input.more ? { more: true } : {}),
+        ...(input.peek ? { peek: true } : {}),
       },
     },
     QUIET,
@@ -79,7 +84,8 @@ async function refreshReviewCounts(environmentId: EnvironmentId): Promise<void> 
     return;
   refresh.inFlight = true;
   refresh.attemptedAt = Date.now();
-  const answer = await fetchReviewCard(environmentId, { exclude: [], more: false });
+  // A peek: a card asked for and dropped would count as served and be held back for a while.
+  const answer = await fetchReviewCard(environmentId, { exclude: [], more: false, peek: true });
   refresh.inFlight = false;
   if ("counts" in answer && openPanels === 0) setReviewCounts(environmentId, answer.counts ?? null);
 }

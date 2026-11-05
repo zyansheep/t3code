@@ -7,7 +7,11 @@ import { render } from "../../../test/render";
 import "../../index.css";
 
 type Request<I> = { readonly environmentId: string; readonly input: I };
-type NextInput = { readonly exclude: ReadonlyArray<string>; readonly more?: boolean };
+type NextInput = {
+  readonly exclude: ReadonlyArray<string>;
+  readonly more?: boolean;
+  readonly peek?: boolean;
+};
 
 // The collector, through the client's own server: each command answers from its mock.
 const collector = vi.hoisted(() => ({
@@ -30,6 +34,10 @@ vi.mock(import("../../state/annotationInteractions"), async (original) => {
       (request: Request<{ items: ReadonlyArray<Record<string, unknown>> }>) =>
         collector.report(request),
     ),
+    getAnnotationStatus: command("test:status", () => ({
+      intensity: { level: 0, until: 0 },
+      english: { on: false, until: 0, at: 0 },
+    })),
   };
 });
 vi.mock(import("../../state/primaryEnvironment"), async () => {
@@ -39,6 +47,7 @@ vi.mock(import("../../state/primaryEnvironment"), async () => {
 
 import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
 import { ReviewPanel } from "./ReviewPanel";
+import { ReviewPanelToggle } from "./ReviewPanelToggle";
 
 const DAY = 86_400;
 const MONDAI = {
@@ -186,4 +195,28 @@ it("reports the card on screen as left, without a grade, when the panel closes",
   await vi.waitFor(() => expect(reviews()).toHaveLength(1));
   expect(reviews()[0]).toMatchObject({ card: "c1", revealMs: expect.any(Number) });
   expect(reviews()[0]).not.toHaveProperty("grade");
+});
+
+it("shows the cards due beside the header button, read with a peek that serves no card", async () => {
+  setup();
+  collector.next.mockReturnValue({ card: null, counts: { new: 12, learning: 3, review: 40 } });
+  const onToggle = vi.fn();
+  await using _screen = await render(
+    <AppAtomRegistryProvider>
+      <ReviewPanelToggle
+        environmentId={EnvironmentId.make("environment-badge")}
+        open={false}
+        shortcutLabel="Alt+Shift+R"
+        onToggle={onToggle}
+      />
+    </AppAtomRegistryProvider>,
+  );
+  const toggle = page.getByRole("button", { name: "Toggle review panel, 55 due" });
+  await expect.element(toggle).toBeVisible();
+  expect(collector.next).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "environment-badge",
+    input: { source: "desktop", exclude: [], peek: true },
+  });
+  await userEvent.click(toggle);
+  expect(onToggle).toHaveBeenCalledOnce();
 });
