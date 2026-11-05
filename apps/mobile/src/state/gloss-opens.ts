@@ -10,6 +10,7 @@ import { writeFileAtomically } from "../lib/atomic-file";
 import {
   createGlossOpenQueue,
   glossContextId,
+  glossContextsOf,
   glossOpenItem,
   glossOpenSession,
   type QueuedGlossOpen,
@@ -118,21 +119,12 @@ export function installGlossOpenDelivery(): () => void {
 
 let session: string | undefined;
 let sequence = 0;
+/** The views of the words opened this run, by their message's context: what the collector has records of. */
+const openedViews = new Map<string, Set<string>>();
 
-function phoneSession(at: number): string {
-  session ??= glossOpenSession(at, Math.random().toString(36).slice(2, 8));
-  return session;
-}
-
-/**
- * The messages with glosses on screen by the view and context their reports carry: the view of this app run, as each
- * opened word's own view starts, and the message's context, as the desktop names it.
- */
+/** The messages with glosses on screen, by the views and context their gloss-open reports carry (lib/glossOpens.ts). */
 export function glossContextsOnScreen(): Array<{ view: string; context: string }> {
-  const view = `phone-${phoneSession(Date.now())}`;
-  return glossedMessagesOnScreen()
-    .slice(0, 30)
-    .map((text) => ({ view, context: glossContextId(text) }));
+  return glossContextsOf(glossedMessagesOnScreen().map(glossContextId), openedViews);
 }
 
 /** Reports a word tapped open. Never throws and never waits: a failed report must not touch the UI. */
@@ -143,15 +135,18 @@ export function reportGlossOpen(input: {
 }): void {
   try {
     const at = Date.now();
+    session ??= glossOpenSession(at, Math.random().toString(36).slice(2, 8));
     sequence += 1;
     const item = glossOpenItem({
-      session: phoneSession(at),
+      session,
       sequence,
       messageText: input.messageText,
       word: input.word,
       at,
     });
     if (item === null) return;
+    const views = openedViews.get(item.context) ?? new Set<string>();
+    openedViews.set(item.context, views.add(item.view));
     void queue
       .add({ environmentId: input.environmentId, item })
       .then(deliverGlossOpens)
