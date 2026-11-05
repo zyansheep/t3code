@@ -149,6 +149,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+4", command: "usage.period.quarter", when: "usagePageOpen" },
   // Vendored: chat in English only for a while, instead of a language-learning tool's Japanese.
   { key: "alt+shift+e", command: "annotations.englishOnly", when: "!terminalFocus" },
+  // Vendored: the review panel for that tool's words.
+  { key: "alt+shift+r", command: "annotations.review", when: "!terminalFocus" },
 ];
 
 function normalizeKeyToken(token: string): string {

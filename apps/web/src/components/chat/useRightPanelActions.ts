@@ -66,7 +66,7 @@ interface RightPanelActionsInput {
 
 /**
  * Opening, closing, and arranging the right panel's surfaces: browser, diff, files, pull
- * requests, device, and terminal tabs.
+ * requests, device, terminal, and review tabs.
  */
 export function useRightPanelActions(input: RightPanelActionsInput) {
   const {
@@ -244,6 +244,10 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     store.toggleThreadPanel(activeThreadRef, threadPanelPresentation);
   };
   const toggleThreadPanelStable = useStableCallback(toggleThreadPanel);
+  const toggleReviewPanel = () => {
+    if (activeThreadRef) useRightPanelStore.getState().toggle(activeThreadRef, "review");
+  };
+  const toggleReviewPanelStable = useStableCallback(toggleReviewPanel);
   const toggleRightPanelMaximized = () => {
     if (!canMaximizeRightPanel || !activeThreadRef) return;
     if (!rightPanelMaximized) requestWorkspaceFocus({ area: "panel" });
@@ -338,6 +342,9 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
       if (!event.repeat) closeRightPanelSurface(activeRightPanelSurface);
     },
     "diff.toggle": () => onToggleDiff(),
+    "annotations.review": ({ event }) => {
+      if (!event.repeat) toggleReviewPanel();
+    },
   } satisfies ChatShortcutCommands;
 
   return {
@@ -360,6 +367,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     openFileSurfaceStable,
     toggleRightPanelMaximizedStable,
     toggleRightPanelStable,
+    toggleReviewPanelStable,
     toggleThreadPanelStable,
   };
 }
