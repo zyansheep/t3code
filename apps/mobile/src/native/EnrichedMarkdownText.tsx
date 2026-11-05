@@ -19,6 +19,7 @@ import {
   isGlossHref,
   markdownWithGlosses,
 } from "../lib/markdownGlosses";
+import { markdownEnglishOnly } from "../lib/markdownEnglishOnly";
 import { isValidElement, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { Platform, Share, StyleSheet, useWindowDimensions, View } from "react-native";
 import {
@@ -228,10 +229,14 @@ function codeBlockElement(
 export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   const { renderImage, resolveImageSource, fileEmbedLabel } = props;
   const { themeAppearance, mathRenderingEnabled } = useAppearancePreferences();
+  const { englishOnly } = props;
   const { markdown, fileHrefs } = useMemo(() => {
+    const shown = englishOnly ? markdownEnglishOnly : (content: string) => content;
     if (!fileEmbedLabel) {
       return {
-        markdown: markdownForNativeRendering(props.markdown, ENRICHED_INLINE_FILE_LINK_REGEX),
+        markdown: shown(
+          markdownForNativeRendering(props.markdown, ENRICHED_INLINE_FILE_LINK_REGEX),
+        ),
         fileHrefs: new Set<string>(),
       };
     }
@@ -240,8 +245,8 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
       ENRICHED_INLINE_FILE_LINK_REGEX,
     );
     const files = markdownWithFileEmbeds(content, fileEmbedLabel);
-    return { ...files, markdown: markdownWithTableBreaks(files.markdown) };
-  }, [props.markdown, fileEmbedLabel]);
+    return { ...files, markdown: shown(markdownWithTableBreaks(files.markdown)) };
+  }, [props.markdown, fileEmbedLabel, englishOnly]);
   // Glossed words a tap has opened, by occurrence: each shows its gloss until tapped again.
   const [openGlosses, setOpenGlosses] = useState<ReadonlySet<number>>(() => new Set());
   const glossed = hasGlossLinks(markdown);
