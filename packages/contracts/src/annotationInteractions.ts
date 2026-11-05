@@ -118,13 +118,15 @@ export class AnnotationIntensityError extends Schema.TaggedError<AnnotationInten
 }
 
 /**
- * Asks the collector for the next card to review; `exclude` holds the ids of cards the client already has, and `more`
- * ("Review more" once the day is done) lifts today's limit on new cards for this request.
+ * Asks the collector for the next card to review; `exclude` holds the ids of cards the client already has, `more`
+ * ("Review more" once the day is done) lifts today's limit on new cards for this request, and `peek` asks for the
+ * counts alone (for a badge): no card is served or recorded.
  */
 export const AnnotationReviewNextInput = Schema.Struct({
   source: Schema.Literals(["desktop", "mobile"]),
   exclude: Schema.Array(AnnotationId).check(Schema.isMaxLength(20)),
   more: Schema.optional(Schema.Boolean),
+  peek: Schema.optional(Schema.Boolean),
 });
 export type AnnotationReviewNextInput = typeof AnnotationReviewNextInput.Type;
 
