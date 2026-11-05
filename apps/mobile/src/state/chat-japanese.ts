@@ -51,6 +51,8 @@ interface Watched {
   attemptedAt: number;
   expiry: ReturnType<typeof setTimeout> | null;
   levelExpiry: ReturnType<typeof setTimeout> | null;
+  /** Presses applied so far: a status read that started before the latest one is out of date when it answers. */
+  presses: number;
 }
 
 const watched = new Map<EnvironmentId, Watched>();
@@ -59,7 +61,14 @@ let stopWakeups: (() => void) | undefined;
 function entry(environmentId: EnvironmentId): Watched {
   let watch = watched.get(environmentId);
   if (!watch) {
-    watch = { settledAt: 0, inFlight: false, attemptedAt: 0, expiry: null, levelExpiry: null };
+    watch = {
+      settledAt: 0,
+      inFlight: false,
+      attemptedAt: 0,
+      expiry: null,
+      levelExpiry: null,
+      presses: 0,
+    };
     watched.set(environmentId, watch);
   }
   return watch;
@@ -118,12 +127,25 @@ function failureReason(result: AtomCommandResult<unknown, unknown>): string | nu
   return error instanceof Error && error.message ? error.message : "request failed";
 }
 
+/**
+ * Keeps a press's answer over any status read already asked, and, when the status was unknown, reads it at once for the
+ * half the press did not answer (English only for a level, the level for English only).
+ */
+function applyPress(environmentId: EnvironmentId, status: AnnotationStatus) {
+  const watch = entry(environmentId);
+  const known = appAtomRegistry.get(annotationStatusAtom(environmentId)) !== null;
+  watch.presses += 1;
+  setStatus(environmentId, status);
+  if (!known) void refreshAnnotationStatus(environmentId);
+}
+
 /** Reads the status again; a server without a collector clears it, and other failures keep the last one. */
 async function refreshAnnotationStatus(environmentId: EnvironmentId): Promise<void> {
   const watch = entry(environmentId);
   if (watch.inFlight) return;
   watch.inFlight = true;
   watch.attemptedAt = Date.now();
+  const presses = watch.presses;
   const result = await runAtomCommand(
     appAtomRegistry,
     getAnnotationStatus,
@@ -131,6 +153,11 @@ async function refreshAnnotationStatus(environmentId: EnvironmentId): Promise<vo
     { reportFailure: false, reportDefect: false },
   );
   watch.inFlight = false;
+  // Asked before a press, it may hold the state from before it: read again instead.
+  if (watch.presses !== presses) {
+    void refreshAnnotationStatus(environmentId);
+    return;
+  }
   if (result._tag === "Success") {
     watch.settledAt = Date.now();
     setStatus(environmentId, result.value);
@@ -201,7 +228,7 @@ export async function setEnglishOnly(
     return reason === null ? null : { ok: false, reason };
   }
   const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
-  setStatus(environmentId, {
+  applyPress(environmentId, {
     intensity: current?.intensity ?? { level: 0, until: 0 },
     english: result.value,
   });
@@ -223,12 +250,10 @@ export async function stepAnnotationLevel(
     const reason = failureReason(result);
     return reason === null ? null : { ok: false, reason };
   }
-  // The collector answered, so it is there: a press before its status was known still shows, and English only is read.
   const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
-  setStatus(environmentId, {
+  applyPress(environmentId, {
     english: current?.english ?? { on: false, until: 0, at: 0 },
     intensity: result.value,
   });
-  if (current === null) void refreshAnnotationStatus(environmentId);
   return { ok: true, value: result.value };
 }
