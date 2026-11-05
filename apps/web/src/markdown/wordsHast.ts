@@ -191,6 +191,16 @@ function tokenize(html: string, offsetOf: (byte: number) => number): Tokenized {
       continue;
     }
     const inSvg = svgDepth > 0 || tagName === "svg";
+    // A self-closing chat level tag (`<abbr data-on="1"/>`) has no text to show, and an HTML parser
+    // would let it take in the rest of its block.
+    if (
+      match[4] &&
+      !inSvg &&
+      (tagName === "abbr" || tagName === "span") &&
+      /\sdata-(?:on|jw)\b/i.test(match[3] ?? "")
+    ) {
+      continue;
+    }
     if (!inSvg && tagName === "li") {
       for (let index = stack.length - 1; index > 0; index--) {
         const openTag = (stack[index] as Element).tagName;

@@ -244,6 +244,6 @@ export function searchableMessageSegments(
     lineBreaks: shouldPreserveAssistantLineBreaks(message.text),
     renderInsights: true,
     theme,
-    level,
+    level: level && { ...level, streaming: message.streaming },
   });
 }

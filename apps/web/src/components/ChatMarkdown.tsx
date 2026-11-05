@@ -456,16 +456,18 @@ function safeUrl(value: string): string {
 }
 
 // After heading ids, so links to a heading keep working in English.
-const chatLevelTransform = (level: number, englishOnly: boolean) =>
-  rehypeChatLevel({ level, englishOnly });
+const chatLevelTransform = (level: number, englishOnly: boolean, streaming: boolean) =>
+  rehypeChatLevel({ level, englishOnly, streaming });
 
-const CHAT_MARKDOWN_ENGLISH_TRANSFORM = chatLevelTransform(-3, true);
-// One transform per chat level, so each keeps its renderer and parse cache.
-const CHAT_MARKDOWN_LEVEL_TRANSFORMS = new Map(
-  [-3, -2, -1, 0, 1, 2, 3].map((level) => [level, chatLevelTransform(level, false)]),
-);
-const levelTransform = (level: number) =>
-  CHAT_MARKDOWN_LEVEL_TRANSFORMS.get(level) ?? chatLevelTransform(level, false);
+// One transform per chat level and English only, finished or streaming, so each keeps its renderer and parse cache.
+const levelTransforms = new Map<string, ReturnType<typeof chatLevelTransform>>();
+function levelTransform(level: number, englishOnly: boolean, streaming: boolean) {
+  const key = `${level} ${englishOnly} ${streaming}`;
+  let transform = levelTransforms.get(key);
+  if (!transform)
+    levelTransforms.set(key, (transform = chatLevelTransform(level, englishOnly, streaming)));
+  return transform;
+}
 
 function markdownUrlTransform(href: string) {
   if (parseAssistantCitationHref(href)) return href;
@@ -2250,12 +2252,18 @@ function ChatMarkdown({
   // Reports from a message with levels carry the one it is rendered at.
   const reportedLevel = hasLevels ? level : undefined;
   const glossed = hasAbbreviations && !englishOnly;
-  const annotatedMarkdown =
-    annotated && englishOnly
-      ? wordsOptions(extensions, { ...markdownFlags, transform: CHAT_MARKDOWN_ENGLISH_TRANSFORM })
-      : hasLevels
-        ? wordsOptions(extensions, { ...markdownFlags, transform: levelTransform(level) })
-        : markdown;
+  const blockMarkdown = (index: number) =>
+    (annotated && englishOnly) || hasLevels
+      ? wordsOptions(extensions, {
+          ...markdownFlags,
+          transform: levelTransform(
+            englishOnly ? -3 : level,
+            englishOnly,
+            // Only the last block of a streaming reply is still being written.
+            props.isStreaming === true && index === blocks.length - 1,
+          ),
+        })
+      : markdown;
   // A message with levels reports only once its server's level is known, never at a guessed one.
   const statusKnown = useAtomValue(annotationStatusKnownAtom(hasLevels ? environmentId : null));
   const reporting = glossed && (!hasLevels || statusKnown);
@@ -2339,7 +2347,7 @@ function ChatMarkdown({
               // oxlint-disable-next-line react/no-array-index-key -- streamed blocks only change at the end
               key={index}
               text={source}
-              markdown={annotatedMarkdown}
+              markdown={blockMarkdown(index)}
               // Every block before the last is finished, so its parse can be reused.
               cache={!props.isStreaming || index < blocks.length - 1}
             />
