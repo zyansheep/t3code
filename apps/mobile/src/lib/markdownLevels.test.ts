@@ -407,8 +407,21 @@ describe("markdownAtLevel on markup the weave did not write", () => {
     expect(seen(empty, 1)).toBe("The 問題 is small.");
   });
 
-  it("leaves a word left open in a finished message as written", () => {
-    const word = 'A <abbr title="あめ · rain" data-en="rain" data-on="1">雨 after.';
-    expect(at(word, 0)).toBe("A 雨 after.");
+  it("shows a word left open in a finished message as its English at every level, the rest of its block kept", () => {
+    const mid =
+      'The <abbr title="もんだい · problem" data-en="problem" data-on="1">問題 is small. ' +
+      ja("1") +
+      en("1");
+    for (const level of [-3, 0]) expect(seen(mid, level)).toBe(`The problem is small. ${EN_TEXT}`);
+    for (const level of [1, 3]) expect(seen(mid, level)).toBe(`The problem is small. ${JA_TEXT}`);
+    const blockEnd =
+      'The <abbr title="もんだい · problem / issue" data-on="1">問題 is small.\n\nNext <abbr title="いま · now" data-en="now" data-on="0">今</abbr>.';
+    expect(at(blockEnd, -3)).toBe("The problem is small.\n\nNext now.");
+    expect(at(blockEnd, 3)).toBe(`The problem is small.\n\nNext ${gloss("今", "いま · now")}.`);
+    expect(englishOnly(blockEnd)).toBe("The problem is small.\n\nNext now.");
+    // While it streams in at the end it still follows its threshold.
+    const tail = 'The <abbr title="もんだい · problem" data-en="problem" data-on="1">問題';
+    expect(at(tail, 0, true)).toBe("The problem");
+    expect(at(tail, 1, true)).toBe("The 問題");
   });
 });
