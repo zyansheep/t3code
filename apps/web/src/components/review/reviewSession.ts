@@ -91,13 +91,11 @@ const MAX_EXCLUDE = 20;
 // The collector refuses longer times; a card left on screen overnight counts as a day.
 const MAX_REPORTED_MS = 86_400_000;
 const reportedMs = (ms: number) => Math.min(MAX_REPORTED_MS, ms);
-/** Waits between resends of a review report: 1 s, doubling to a minute. */
-const reportRetryDelay = (attempt: number) => Math.min(60_000, 1_000 * 2 ** attempt);
 
 /**
  * One review panel's cards: shows one, reports it graded or left, and asks for the next while it is shown, once earlier
- * reports have had a first answer. A report that may not have arrived is resent under its uid until stored, its card
- * excluded meanwhile; cards served but never shown are released. Counts are the latest answer's, less later grades.
+ * reports have had a first answer. A report that may not have arrived is left to the outbox to send again, its card
+ * excluded from then on; cards served but never shown are released. Counts are the latest answer's, less later grades.
  */
 export class ReviewSession {
   private readonly deps: ReviewSessionDeps;
@@ -109,7 +107,7 @@ export class ReviewSession {
   private request: Request | null = null;
   private readonly graded: Array<AnnotationReviewCard["queue"]> = [];
   private reports: Promise<unknown> = Promise.resolve();
-  /** Graded cards whose report the collector does not have yet. */
+  /** Graded cards whose report may not have arrived, which the outbox sends again. */
   private readonly unstored = new Set<string>();
   private more = false;
   private retry: ReturnType<typeof setTimeout> | undefined;
@@ -223,18 +221,13 @@ export class ReviewSession {
       uid: shown.uid,
       ...(graded ? { grade: graded.grade, gradeMs: reportedMs(graded.gradeMs) } : {}),
     };
-    this.reports = Promise.allSettled([this.reports, this.deliver(item, 0)]);
+    this.reports = Promise.allSettled([this.reports, this.deliver(item)]);
   }
 
-  /** Sends `item`, and again after a while for as long as it may not have arrived; settles on the first answer. */
-  private async deliver(item: ReviewItem, attempt: number): Promise<void> {
+  /** Sends `item` once; one that may not have arrived waits in the outbox, which sends it again. */
+  private async deliver(item: ReviewItem): Promise<void> {
     const outcome = await this.deps.report(item).catch(() => "failed" as const);
-    if (outcome !== "failed") {
-      this.unstored.delete(item.card);
-      return;
-    }
-    if (item.grade !== undefined) this.unstored.add(item.card);
-    setTimeout(() => void this.deliver(item, attempt + 1), reportRetryDelay(attempt));
+    if (outcome === "failed" && item.grade !== undefined) this.unstored.add(item.card);
   }
 
   /** Every report sent so far has settled, so the collector knows each grade. */

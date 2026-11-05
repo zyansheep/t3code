@@ -23,13 +23,15 @@ vi.mock(import("../../state/annotationInteractions"), async (original) => {
   const { fail } = await import("effect/Cause");
   const { is } = await import("effect/Schema");
   const isReportError = is(ReportError);
-  // An answer that is an AnnotationReportError fails the command with it.
+  // An answer that is an AnnotationReportError, or another Error, fails the command with it.
   const command = <I,>(label: string, answer: (request: Request<I>) => unknown) =>
     ({
       label,
       run: async (_registry: unknown, request: Request<I>) => {
         const value = answer(request);
-        return isReportError(value) ? AsyncResult.failure(fail(value)) : AsyncResult.success(value);
+        return isReportError(value) || value instanceof Error
+          ? AsyncResult.failure(fail(value))
+          : AsyncResult.success(value);
       },
     }) as never;
   return {
@@ -322,4 +324,50 @@ it("settles each report in a batch by index, and keeps only the newest 200 of th
   expect(sent()).toHaveLength(5);
   expect(outbox(environment)).toEqual([]);
   expect(await reportReview(EnvironmentId.make(environment), graded("lone"))).toBe("stored");
+});
+
+const queue = (environment: string, ...uids: string[]) =>
+  localStorage.setItem(
+    `t3code:annotation-review-outbox:v1:${environment}`,
+    JSON.stringify(uids.map((uid) => ({ item: graded(uid), queuedAt: NOW }))),
+  );
+
+it("settles reports against the outbox as it stands in storage, sending what another window added", async () => {
+  using _clock = systemTime(NOW);
+  setup();
+  const environment = "environment-outbox-windows";
+  queue(environment, "u1");
+  collector.report.mockImplementationOnce(() => {
+    // Another window queues a report while this one's batch is out.
+    queue(environment, "u1", "u2");
+    return {};
+  });
+  collector.report.mockReturnValue({});
+  await flushReviewOutbox(EnvironmentId.make(environment));
+  expect(sent()).toEqual([["u1"], ["u2"]]);
+  expect(outbox(environment)).toEqual([]);
+});
+
+it("sends a batch refused for another reason one report at a time, and drops a report refused alone 5 times", async () => {
+  using _clock = systemTime(NOW);
+  setup();
+  const environment = "environment-outbox-refused";
+  queue(environment, "bad", "good");
+  collector.report.mockImplementation(({ input }) =>
+    input.items.some((item) => item.uid === "bad") ? new Error("invalid report") : {},
+  );
+  await flushReviewOutbox(EnvironmentId.make(environment));
+  expect(sent()).toEqual([["bad", "good"], ["bad"], ["good"]]);
+  expect(outbox(environment).map((entry) => entry.item.uid)).toEqual(["bad"]);
+  for (let flush = 0; flush < 4; flush += 1)
+    await flushReviewOutbox(EnvironmentId.make(environment));
+  expect(sent()).toHaveLength(7);
+  expect(outbox(environment)).toEqual([]);
+
+  // A dropped connection says nothing about the report: it stays, uncounted, for the next flush.
+  collector.report.mockReturnValue(new Error("Socket is not connected"));
+  expect(await reportReview(EnvironmentId.make(environment), graded("offline"))).toBe("failed");
+  for (let flush = 0; flush < 6; flush += 1)
+    await flushReviewOutbox(EnvironmentId.make(environment));
+  expect(outbox(environment).map((entry) => entry.item.uid)).toEqual(["offline"]);
 });

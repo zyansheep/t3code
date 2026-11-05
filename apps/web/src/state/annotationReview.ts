@@ -4,6 +4,7 @@ import {
   type AnnotationReviewNextResult,
   type EnvironmentId,
 } from "@t3tools/contracts";
+import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
   runAtomCommand,
@@ -85,12 +86,17 @@ const decodeInteraction = Schema.decodeUnknownOption(AnnotationInteraction);
 
 type ReviewItem = Extract<AnnotationInteraction, { kind: "review" }>;
 type ReportOutcome = "stored" | "rejected" | "failed";
+/** `error`: refused for some other reason than the collector's, which may never change; kept for a few tries. */
+type SendOutcome = ReportOutcome | "error";
 interface Queued {
   readonly item: ReviewItem;
   readonly queuedAt: number;
+  /** Sends that ended in an `error`. */
+  readonly errors: number;
 }
 
 const MAX_BATCH = 50;
+const MAX_ERRORS = 5;
 const OUTBOX_LIMIT = 200;
 const OUTBOX_MAX_AGE_MS = 7 * 24 * 3_600_000;
 const outboxKey = (environmentId: EnvironmentId) =>
@@ -107,11 +113,12 @@ function readOutbox(environmentId: EnvironmentId): Queued[] {
   if (!Array.isArray(raw)) return [];
   const since = Date.now() - OUTBOX_MAX_AGE_MS;
   return raw
-    .flatMap((entry: { item?: unknown; queuedAt?: unknown }) => {
+    .flatMap((entry: { item?: unknown; queuedAt?: unknown; errors?: unknown }) => {
       const item = Option.getOrUndefined(decodeInteraction(entry?.item));
       const queuedAt = entry?.queuedAt;
+      const errors = typeof entry?.errors === "number" ? entry.errors : 0;
       return item?.kind === "review" && item.uid && typeof queuedAt === "number" && queuedAt > since
-        ? [{ item, queuedAt }]
+        ? [{ item, queuedAt, errors }]
         : [];
     })
     .slice(-OUTBOX_LIMIT);
@@ -127,37 +134,53 @@ function writeOutbox(environmentId: EnvironmentId, queued: ReadonlyArray<Queued>
   }
 }
 
+/**
+ * Takes stored and rejected reports out of the outbox as it is in storage now (another window may have added some),
+ * and counts an `error` against a report sent alone, dropping it after `MAX_ERRORS`.
+ */
 function settle(
   environmentId: EnvironmentId,
   items: ReadonlyArray<ReviewItem>,
-  outcomes: ReportOutcome[],
+  outcomes: ReadonlyArray<SendOutcome>,
 ) {
   const done = new Set(
-    items.flatMap((item, index) => (outcomes[index] === "failed" ? [] : [item.uid])),
+    items.flatMap((item, index) =>
+      outcomes[index] === "stored" || outcomes[index] === "rejected" ? [item.uid] : [],
+    ),
   );
-  if (done.size > 0) {
-    writeOutbox(
-      environmentId,
-      readOutbox(environmentId).filter((queued) => !done.has(queued.item.uid)),
-    );
-  }
+  const errored = new Set(items.length === 1 && outcomes[0] === "error" ? [items[0]!.uid] : []);
+  if (done.size === 0 && errored.size === 0) return;
+  writeOutbox(
+    environmentId,
+    readOutbox(environmentId).flatMap((queued) => {
+      if (done.has(queued.item.uid)) return [];
+      if (!errored.has(queued.item.uid)) return [queued];
+      return queued.errors + 1 >= MAX_ERRORS ? [] : [{ ...queued, errors: queued.errors + 1 }];
+    }),
+  );
 }
 
 /** Sends review items in one report, settling each: stored, rejected for good, or failed and worth sending again. */
 async function sendReviews(
   environmentId: EnvironmentId,
   items: ReadonlyArray<ReviewItem>,
-): Promise<ReportOutcome[]> {
+): Promise<SendOutcome[]> {
   const result = await runAtomCommand(
     appAtomRegistry,
     reportAnnotationInteractions,
     { environmentId, input: { items: [...items] } },
     QUIET,
   );
-  const outcomes = ((): ReportOutcome[] => {
+  const outcomes = ((): SendOutcome[] => {
     if (result._tag === "Success") return items.map(() => "stored");
-    const error = isAtomCommandInterrupted(result) ? null : squashAtomCommandFailure(result);
-    if (!isReportError(error) || error.retryable) return items.map(() => "failed");
+    if (isAtomCommandInterrupted(result)) return items.map(() => "failed");
+    const error = squashAtomCommandFailure(result);
+    if (!isReportError(error)) {
+      // A dropped connection says nothing about the reports; any other refusal may be about one of them.
+      const message = error instanceof Error ? error.message : String(error);
+      return items.map(() => (isTransportConnectionErrorMessage(message) ? "failed" : "error"));
+    }
+    if (error.retryable) return items.map(() => "failed");
     const rejected = new Set(error.rejected?.map((reason) => reason.item));
     return items.map((_item, index) => (rejected.has(index) ? "rejected" : "stored"));
   })();
@@ -167,7 +190,7 @@ async function sendReviews(
 
 /**
  * Sends one review item, kept in this environment's outbox until the collector stores or rejects it: `failed` when
- * it may not have arrived and can be sent again under the same uid.
+ * it may not have arrived. The outbox's next flush sends it again under the same uid.
  */
 export async function reportReview(
   environmentId: EnvironmentId,
@@ -175,27 +198,43 @@ export async function reportReview(
 ): Promise<ReportOutcome> {
   const queued = readOutbox(environmentId);
   if (!queued.some((entry) => entry.item.uid === item.uid)) {
-    writeOutbox(environmentId, [...queued, { item, queuedAt: Date.now() }]);
+    writeOutbox(environmentId, [...queued, { item, queuedAt: Date.now(), errors: 0 }]);
   }
   const [outcome] = await sendReviews(environmentId, [item]);
-  return outcome ?? "failed";
+  return outcome === "stored" || outcome === "rejected" ? outcome : "failed";
 }
 
 const flushing = new Set<EnvironmentId>();
 
-/** Sends the review reports an earlier run could not, under their uids, until one batch fails. */
+/**
+ * Sends the review reports an earlier run could not, under their uids, a batch at a time as the outbox stands in
+ * storage, until one may not have arrived. A batch refused for another reason goes again one report at a time, so
+ * only the report at fault counts the refusal.
+ */
 export async function flushReviewOutbox(environmentId: EnvironmentId): Promise<void> {
   if (flushing.has(environmentId)) return;
   flushing.add(environmentId);
-  let queued = readOutbox(environmentId);
-  writeOutbox(environmentId, queued);
-  while (queued.length > 0) {
-    const batch = queued.slice(0, MAX_BATCH).map((entry) => entry.item);
-    const outcomes = await sendReviews(environmentId, batch);
-    if (outcomes.includes("failed")) break;
-    queued = queued.slice(MAX_BATCH);
+  const tried = new Set<string>();
+  writeOutbox(environmentId, readOutbox(environmentId));
+  try {
+    while (true) {
+      const batch = readOutbox(environmentId)
+        .filter((queued) => !tried.has(queued.item.uid ?? ""))
+        .slice(0, MAX_BATCH)
+        .map((queued) => queued.item);
+      if (batch.length === 0) return;
+      for (const item of batch) tried.add(item.uid ?? "");
+      const outcomes = await sendReviews(environmentId, batch);
+      if (outcomes.includes("failed")) return;
+      if (batch.length === 1 || !outcomes.includes("error")) continue;
+      for (const item of batch) {
+        const [outcome] = await sendReviews(environmentId, [item]);
+        if (outcome === "failed") return;
+      }
+    }
+  } finally {
+    flushing.delete(environmentId);
   }
-  flushing.delete(environmentId);
 }
 
 export function setReviewCounts(environmentId: EnvironmentId, counts: ReviewCounts | null): void {
