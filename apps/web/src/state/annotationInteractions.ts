@@ -19,7 +19,7 @@ export const adjustAnnotationIntensity = createEnvironmentRpcCommand(connectionA
   concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
 });
 
-/** The next word to review in a gloss popover, served by the collector through this client's own server. */
+/** The next word to review in the review panel, served by the collector through this client's own server. */
 export const nextAnnotationReview = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-data:annotations:review",
   tag: WS_METHODS.serverNextAnnotationReview,

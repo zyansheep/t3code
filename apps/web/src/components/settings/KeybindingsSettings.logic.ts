@@ -548,6 +548,7 @@ export function commandLabel(command: KeybindingCommand, resolve: MessageResolve
   if (lateLabel) return resolve(lateLabel);
   // The fork's own commands, in English only.
   if (command === "annotations.englishOnly") return "Chat: English Only";
+  if (command === "annotations.review") return "Toggle Review Panel";
   const raw = String(command);
   if (raw.startsWith("thread.jump.")) {
     return resolve(msg("Thread: Jump: {n}", { n: raw.slice("thread.jump.".length) }));

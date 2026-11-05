@@ -23,13 +23,19 @@ function press(
   });
 }
 
-describe("chat English-only shortcut", () => {
-  it("maps Alt+Shift+E to English only by physical key", () => {
+describe("chat Japanese shortcuts", () => {
+  it("maps Alt+Shift+E to English only and Alt+Shift+R to the review panel, by physical key", () => {
     expect(press({ altKey: true, shiftKey: true })).toBe("annotations.englishOnly");
     // Option turns E into another character on macOS.
     expect(press({ key: "´", altKey: true, shiftKey: true }, { platform: "MacIntel" })).toBe(
       "annotations.englishOnly",
     );
+    expect(press({ key: "R", code: "KeyR", altKey: true, shiftKey: true })).toBe(
+      "annotations.review",
+    );
+    expect(
+      press({ key: "R", code: "KeyR", altKey: true, shiftKey: true }, { terminalFocus: true }),
+    ).toBeNull();
   });
 
   it("ignores other modifiers, the focused terminal, and the retired heavier and lighter keys", () => {
