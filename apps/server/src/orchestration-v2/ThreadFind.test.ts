@@ -396,6 +396,28 @@ describe("V2 thread find", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("counts what a reply shows at the client's chat level", () =>
+    Effect.gen(function* () {
+      const projection = yield* setup;
+      yield* putItems([
+        item(
+          "leveled",
+          1,
+          'The <abbr title="mondai · problem" data-en="problem" data-on="1">mondai</abbr> is small.',
+        ),
+      ]);
+      const count = (query: string, chatLevel?: { level: number; englishOnly: boolean }) =>
+        projection
+          .searchThread({ threadId, query, ...(chatLevel ? { chatLevel } : {}) })
+          .pipe(Effect.map((result) => result.totalMatches));
+      assert.equal(yield* count("problem"), 0);
+      assert.equal(yield* count("problem", { level: 0, englishOnly: false }), 1);
+      assert.equal(yield* count("problem", { level: 1, englishOnly: false }), 0);
+      assert.equal(yield* count("mondai", { level: 1, englishOnly: false }), 1);
+      assert.equal(yield* count("mondai", { level: -3, englishOnly: true }), 0);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("never mixes message versions when the searched thread changes during a scan", () =>
     Effect.gen(function* () {
       const projection = yield* setup;
