@@ -14,7 +14,12 @@ const AnnotationId = Schema.String.check(
 
 const Duration = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 
-/** Where a message sat and where every annotation in it sat relative to the message, as `[text, x, y]`. */
+const AnnotationLevel = Schema.Int.check(Schema.isBetween({ minimum: -3, maximum: 3 }));
+
+/**
+ * Where a message sat and where every annotation in it sat relative to the message, as `[text, x, y]`. `level` is the
+ * chat level the message was rendered at, for a message that carries its Japanese at every level.
+ */
 const AnnotationPlace = {
   at: Schema.Finite,
   view: AnnotationId,
@@ -23,6 +28,7 @@ const AnnotationPlace = {
   annotations: Schema.Array(Schema.Tuple([AnnotationText, Schema.Finite, Schema.Finite])).check(
     Schema.isMaxLength(200),
   ),
+  level: Schema.optional(AnnotationLevel),
 };
 
 /**
@@ -161,7 +167,7 @@ export type AnnotationIntensityAdjustInput = typeof AnnotationIntensityAdjustInp
  * is), and when it ends (epoch ms, `0` at level 0).
  */
 export const AnnotationIntensity = Schema.Struct({
-  level: Schema.Int.check(Schema.isBetween({ minimum: -3, maximum: 3 })),
+  level: AnnotationLevel,
   until: Schema.Finite,
 });
 export type AnnotationIntensity = typeof AnnotationIntensity.Type;
