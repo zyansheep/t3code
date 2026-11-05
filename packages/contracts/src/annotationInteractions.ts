@@ -27,6 +27,8 @@ export const AnnotationOpen = Schema.Struct({
   annotations: Schema.Array(Schema.Tuple([AnnotationText, Schema.Finite, Schema.Finite])).check(
     Schema.isMaxLength(200),
   ),
+  /** The chat level the message was rendered at when this was recorded, `-3` (English only) to `3`. */
+  level: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: -3, maximum: 3 }))),
   kind: Schema.Literals(["peek", "pin"]),
   word: AnnotationText,
   dwellMs: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
