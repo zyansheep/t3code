@@ -92,6 +92,7 @@ import {
   AnnotationIntensityAdjustInput,
   AnnotationIntensityError,
   AnnotationInteractionsReportInput,
+  AnnotationReportError,
   AnnotationReviewError,
   AnnotationReviewNextInput,
   AnnotationReviewNextResult,
@@ -1071,7 +1072,7 @@ const WsServerReportAnnotationInteractionsRpc = Rpc.make(
   WS_METHODS.serverReportAnnotationInteractions,
   {
     payload: AnnotationInteractionsReportInput,
-    error: EnvironmentAuthorizationError,
+    error: Schema.Union([AnnotationReportError, EnvironmentAuthorizationError]),
   },
 );
 
