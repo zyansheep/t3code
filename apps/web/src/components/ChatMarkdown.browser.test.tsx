@@ -871,6 +871,17 @@ const LEVELED =
   '<span data-jw="en" data-on="2">It is <abbr title="あめ · rain" data-en="rain" data-on="0">雨</abbr>.</span>';
 
 describe("ChatMarkdown levels", () => {
+  it("hides an abbr tag still arriving at the end of a streaming reply, before it has any levels", async () => {
+    setup();
+    await using screen = await renderText(
+      'Say x<y. The <abbr title="もんだい · problem" data-en="pro',
+      {
+        isStreaming: true,
+      },
+    );
+    expect(screen.container.textContent).toBe("Say x<y. The ");
+  });
+
   it("renders a message at the reader's level, again from the panel's arrows, and reports what it shows at that level", async () => {
     setup();
     setEnglishOnly(ENGLISH_ENVIRONMENT, false);
