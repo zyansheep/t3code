@@ -83,8 +83,8 @@ describe("rehypeChatLevel with malformed twins", () => {
     ["pair_blankline_between", `${RAINING} ${RAINING}`, `${RAIN} ${RAINING}`],
     ["mismatched_on", `${RAINING}${RAINING}`, `${RAIN}${RAINING}`],
     ["swapped_order", `${RAINING}${RAINING}`, `${RAINING}${RAIN}`],
-    // Broken: every pair shows its English twin, and a split Japanese twin leaves nothing below its threshold.
-    ["blank_line_in_ja", RAINING, `今日は 雨です。${RAINING}`],
+    // Broken: every pair shows its English twin, and a Japanese twin a block end closed never shows.
+    ["blank_line_in_ja", RAINING, RAINING],
     ["blank_line_in_en", "It is raining.", "It is raining."],
     // A Japanese twin left open ends where its English twin starts: a pair, in a broken message.
     ["unclosed_ja", `Intro. ${RAINING} Outro.`, `Intro. ${RAINING} Outro.`],

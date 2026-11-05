@@ -220,12 +220,14 @@ function renderAt(tree: HastNode, level: number, streaming: boolean) {
   function japaneseTwin(twin: Twin): HastNode[] {
     const node = twin.node;
     if (partners.has(node)) return !broken && level >= twin.on ? [withChildren(node)] : [];
-    if (level >= twin.on) return [withChildren(node)];
+    // A Japanese twin a block end closed lost part of itself, so it never shows.
+    if (level >= twin.on && !leftOpen(node, streaming)) return [withChildren(node)];
     if (tails.has(twin)) return [];
-    const translation = lastSentenceTranslation(node);
     hiddenUntil = broken ? nextEnglish(twin) : null;
     // Hiding, its children keep only an English twin an unclosed span took in, and what follows it.
     const kept = hiddenUntil === null ? [] : (withChildren(node).children ?? []);
+    // Its sentence shows once: as its English twin when one follows, else as its sentence mark's translation.
+    const translation = hiddenUntil === null ? lastSentenceTranslation(node) : "";
     return [...(translation === "" ? [] : [{ type: "text", value: translation }]), ...kept];
   }
   function visit(node: HastNode): HastNode[] {
