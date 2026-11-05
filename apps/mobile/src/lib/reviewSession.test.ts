@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   countsAfterGrades,
+  createCardReleases,
   createReviewSession,
   REVIEW_EXCLUDE_MAX,
   reviewFailureDetail,
@@ -51,7 +52,7 @@ interface Delivery {
 
 /**
  * A session whose server answers `answers` in order (then nothing to review). Graded items wait in `deliveries` until
- * the test resolves them, unless `autoDeliver`.
+ * the test resolves them, unless `autoDeliver`; the wait for them ends when the test calls `timeUp`.
  */
 function harness(answers: Array<ReviewFetch | Error> = [], autoDeliver = true) {
   let mono = 1000;
@@ -59,6 +60,8 @@ function harness(answers: Array<ReviewFetch | Error> = [], autoDeliver = true) {
   const emitted: AnnotationReviewItem[] = [];
   const deliveries: Delivery[] = [];
   const badge: ReviewCounts[] = [];
+  const released: string[] = [];
+  const sleeps: Array<() => void> = [];
   let next = 0;
   const session = createReviewSession({
     fetchNext: async (request) => {
@@ -72,6 +75,8 @@ function harness(answers: Array<ReviewFetch | Error> = [], autoDeliver = true) {
       if (item.grade === undefined || autoDeliver) return Promise.resolve(true);
       return new Promise<boolean>((resolve) => deliveries.push({ item, resolve }));
     },
+    sleep: () => new Promise<void>((resolve) => sleeps.push(resolve)),
+    release: (cardId) => released.push(cardId),
     monotonicNow: () => mono,
     wallNow: () => WALL + mono,
     uid: () => `u${emitted.length + 1}`,
@@ -84,7 +89,12 @@ function harness(answers: Array<ReviewFetch | Error> = [], autoDeliver = true) {
     emitted,
     deliveries,
     badge,
+    released,
     view,
+    /** The wait for every grade so far runs out. */
+    timeUp: () => {
+      for (const wake of sleeps.splice(0)) wake();
+    },
     tick: (ms: number) => {
       mono += ms;
     },
@@ -201,7 +211,7 @@ describe("review session", () => {
     expect(h.requests.map((request) => request.exclude)).toEqual([[], ["c1"], [], ["c1"]]);
   });
 
-  it("keeps excluding a graded card whose grade the server has not confirmed", async () => {
+  it("excludes a graded card until its report lands, however late, and waits for that only so long", async () => {
     const h = harness([answer(card(1)), answer(card(2)), answer(card(3))], false);
     h.session.start();
     await settle();
@@ -209,9 +219,97 @@ describe("review session", () => {
     h.session.reveal();
     h.session.grade(2);
     h.session.next();
-    h.deliveries[0]!.resolve(false);
+    await settle();
+    expect(h.requests).toHaveLength(2); // the next card waits for the grade
+    h.timeUp();
     await settle();
     expect(h.requests.at(-1)?.exclude).toEqual(["c2", "c1"]);
+    h.deliveries[0]!.resolve(true); // a retry got it through
+    await settle();
+    h.shown();
+    h.session.reveal();
+    h.session.grade(3);
+    h.session.next();
+    h.deliveries[1]!.resolve(false); // dropped unsent: the card is free to come back
+    await settle();
+    expect(h.requests.at(-1)?.exclude).toEqual(["c3"]);
+  });
+
+  it("counts an answer as knowing every grade made before it was asked for", async () => {
+    const h = harness(
+      [
+        answer(card(1, "new"), counts(5, 0, 0)),
+        answer(card(2, "new"), counts(5, 0, 0)),
+        answer(card(3, "new"), counts(3, 0, 0)),
+      ],
+      false,
+    );
+    h.session.start();
+    await settle();
+    h.shown();
+    h.session.reveal();
+    h.session.grade(3);
+    h.session.next(); // c2 at once; the request for c3 waits for c1's grade
+    h.shown();
+    h.session.reveal();
+    h.session.grade(3); // made before that request goes
+    h.deliveries[0]!.resolve(true);
+    await settle();
+    expect(h.requests).toHaveLength(3);
+    expect(h.view().counts).toEqual(counts(3, 0, 0));
+  });
+
+  it("clamps the durations it reports to a day", async () => {
+    const h = harness([answer(card(1))]);
+    h.session.start();
+    await settle();
+    h.shown();
+    h.tick(2 * 86_400_000);
+    h.session.reveal();
+    h.tick(1000);
+    h.session.grade(4);
+    expect(h.emitted[0]).toMatchObject({
+      revealMs: 86_400_000,
+      shownMs: 86_400_000,
+      gradeMs: 86_400_000,
+    });
+    expect(() => decodeReport({ items: h.emitted })).not.toThrow();
+  });
+
+  it("releases cards served but never shown: the prefetched one and one closed before it was on screen", async () => {
+    const h = harness([answer(card(1)), answer(card(2))]);
+    h.session.start();
+    await settle();
+    h.session.close(); // c1 still sliding in, c2 prefetched
+    await settle();
+    expect(h.released).toEqual(["c1", "c2"]);
+    expect(h.emitted).toEqual([]);
+  });
+
+  it("releases the card left unshown by the background, and nothing it showed", async () => {
+    const h = harness([answer(card(1)), answer(card(2)), answer(card(3))]);
+    h.session.start();
+    await settle();
+    h.session.suspend();
+    h.session.resume();
+    await settle();
+    h.shown();
+    h.session.close();
+    await settle();
+    expect(h.released).toEqual(["c1", "c3"]);
+  });
+
+  it("starts over when started again after close, as a remounted screen does", async () => {
+    const h = harness([answer(card(1)), answer(card(2)), answer(card(3)), answer(card(4))]);
+    h.session.start();
+    await settle();
+    h.session.close();
+    h.session.start();
+    await settle();
+    expect(h.view()).toMatchObject({ _tag: "card", card: card(3) });
+    h.shown();
+    h.session.reveal();
+    expect(h.session.grade(3)).toBe(true);
   });
 
   it("is done for the day when there is no card and nothing due, and reviews more on request", async () => {
@@ -330,14 +428,17 @@ describe("review session", () => {
     expect(h.requests.map((request) => request.exclude)).toEqual([[], ["c1"], [], ["c2"]]);
   });
 
-  it("drops an answer that arrives after close", async () => {
+  it("drops an answer that arrives after close, releasing its card", async () => {
     let release: (value: ReviewFetch) => void = () => undefined;
+    const released: string[] = [];
     const session = createReviewSession({
       fetchNext: () =>
         new Promise((resolve) => {
           release = resolve;
         }),
       emit: () => undefined,
+      sleep: () => Promise.resolve(),
+      release: (cardId) => released.push(cardId),
       monotonicNow: () => 0,
       wallNow: () => WALL,
       uid: () => "u",
@@ -348,6 +449,7 @@ describe("review session", () => {
     release(answer(card(1), counts(1, 0, 0)));
     await settle();
     expect(session.getView()).toEqual({ _tag: "closed", counts: null });
+    expect(released).toEqual(["c1"]);
   });
 
   it("excludes at most 20 cards whose grades the server has not confirmed, the latest first", async () => {
@@ -362,13 +464,28 @@ describe("review session", () => {
       h.session.reveal();
       h.session.grade(3);
       h.session.next();
-      h.deliveries.at(-1)!.resolve(false);
+      h.timeUp();
       await settle();
     }
     const last = h.requests.at(-1)!;
     expect(last.exclude).toHaveLength(REVIEW_EXCLUDE_MAX);
     expect(last.exclude[0]).toBe("c23");
     expect(new Set(h.emitted.map((item) => item.uid)).size).toBe(22);
+  });
+});
+
+describe("createCardReleases", () => {
+  it("hands each card over once, at most 20 a request, and takes back those of a failed request", () => {
+    const releases = createCardReleases();
+    for (let index = 1; index <= 22; index += 1) releases.add(`c${index}`);
+    releases.add("c22");
+    const taken = releases.take();
+    expect(taken).toHaveLength(REVIEW_EXCLUDE_MAX);
+    expect(taken.at(-1)).toBe("c22");
+    expect(releases.take()).toEqual([]);
+    releases.add("c30");
+    releases.restore(["c21"]);
+    expect(releases.take()).toEqual(["c21", "c30"]);
   });
 });
 

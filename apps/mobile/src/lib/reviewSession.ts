@@ -53,10 +53,14 @@ export interface ReviewSessionOptions {
     readonly more: boolean;
   }) => Promise<ReviewFetch>;
   /**
-   * Queues a review item for the server; must not throw into the view. For a graded item it resolves true once the
-   * server has it, or false when it could not tell in time.
+   * Queues a review item for the server; must not throw into the view. For a graded item it settles once the item has
+   * left the queue, however long its retries take: true when the server stored it, false when it was dropped.
    */
   readonly emit: (item: AnnotationReviewItem) => Promise<boolean> | void;
+  /** Resolves after `ms`: how long the next card waits for a grade to land before it is asked for anyway. */
+  readonly sleep: (ms: number) => Promise<void>;
+  /** A card served to this client and dropped before it was shown, for the next request's `release`. */
+  readonly release: (cardId: string) => void;
   /** A monotonic clock in ms (performance.now where there is one), for the durations. */
   readonly monotonicNow: () => number;
   /** Epoch ms, for `at`. */
@@ -69,6 +73,10 @@ export interface ReviewSessionOptions {
 
 /** The server takes at most 20 ids to exclude. */
 export const REVIEW_EXCLUDE_MAX = 20;
+/** How long the next card waits for the server to take a grade before it is asked for anyway. */
+export const REVIEW_DELIVERY_WAIT_MS = 4_000;
+/** The collector takes durations up to a day; a card left on screen longer counts as a day. */
+const DURATION_MAX_MS = 86_400_000;
 const DETAIL_MAX_LENGTH = 160;
 
 interface Showing {
@@ -93,7 +101,8 @@ interface Prefetch {
 
 const hasCard = (answer: Answer) => answer.result._tag === "answer" && answer.result.card !== null;
 
-const duration = (from: number, to: number) => Math.max(0, Math.round(to - from));
+const duration = (from: number, to: number) =>
+  Math.min(DURATION_MAX_MS, Math.max(0, Math.round(to - from)));
 
 export const reviewCountsTotal = (counts: ReviewCounts) =>
   counts.new + counts.learning + counts.review;
@@ -108,6 +117,28 @@ export function countsAfterGrades(
     if (queue !== undefined) next[queue] = Math.max(0, next[queue] - 1);
   }
   return next;
+}
+
+/**
+ * Cards served to this client and dropped unshown, for the next request's `release`: at most 20 a request, the latest
+ * kept when there are more; a request that failed puts its own back.
+ */
+export function createCardReleases() {
+  let ids: ReadonlyArray<string> = [];
+  const keep = (list: ReadonlyArray<string>) => [...new Set(list)].slice(-REVIEW_EXCLUDE_MAX);
+  return {
+    add(id: string) {
+      ids = keep([...ids.filter((other) => other !== id), id]);
+    },
+    take(): ReadonlyArray<string> {
+      const taken = ids;
+      ids = [];
+      return taken;
+    },
+    restore(taken: ReadonlyArray<string>) {
+      ids = keep([...taken, ...ids]);
+    },
+  };
 }
 
 /** A short line for the view out of whatever a failed request gave. */
@@ -133,7 +164,7 @@ export function createReviewSession(options: ReviewSessionOptions) {
   let prefetch: Prefetch | null = null;
   /** Cards graded whose grade the server may not have yet, the latest first: they are not to be served again. */
   let undelivered: ReadonlyArray<string> = [];
-  /** Settles once the server has every grade so far, or the wait for one has given up. */
+  /** Settles once the server has every grade so far, or the wait for each has run out. */
   let delivered: Promise<void> = Promise.resolve();
   /** The queue of each card graded, in order, for the counts. */
   const gradedQueues: Array<ReviewQueue | undefined> = [];
@@ -165,12 +196,13 @@ export function createReviewSession(options: ReviewSessionOptions) {
     return [...new Set([...held, ...undelivered])].slice(0, REVIEW_EXCLUDE_MAX);
   };
 
-  /** Asks the server once every grade so far has reached it; the cards to exclude are read when it asks. */
-  const ask = (): Promise<Answer> => {
-    const gradesBefore = gradedQueues.length;
-    return delivered.then(() => {
+  /** Asks the server once every grade so far has reached it; what to exclude is read when it asks. */
+  const ask = (): Promise<Answer> =>
+    delivered.then(() => {
       asked += 1;
       const sequence = asked;
+      // Grades made from here on are news to this answer; earlier ones the server has, or will have, counted.
+      const gradesBefore = gradedQueues.length;
       let promise: Promise<ReviewFetch>;
       try {
         promise = options.fetchNext({ exclude: exclude(), more });
@@ -192,6 +224,12 @@ export function createReviewSession(options: ReviewSessionOptions) {
           return { result, sequence };
         });
     });
+
+  /** A card served and dropped before it was on screen: free for the server to serve again. */
+  const drop = (answer: Answer) => {
+    if (answer.result._tag === "answer" && answer.result.card !== null) {
+      options.release(answer.result.card.id);
+    }
   };
 
   const startPrefetch = () => {
@@ -236,7 +274,7 @@ export function createReviewSession(options: ReviewSessionOptions) {
     const mine = request;
     setPhase({ _tag: "loading" });
     void promise.then((answer) => {
-      if (closed || mine !== request) return;
+      if (closed || mine !== request) return drop(answer);
       apply(answer);
     });
   };
@@ -270,13 +308,14 @@ export function createReviewSession(options: ReviewSessionOptions) {
     };
   };
 
-  /** Ends the current showing without a grade: one review item if it got on screen, nothing otherwise. */
+  /** Ends the current showing without a grade: one review item if it got on screen, else its card is released. */
   const leave = () => {
     const showing = current;
     if (showing === null || showing.left) return;
     showing.left = true;
     const left = item(showing, options.monotonicNow());
     if (left !== null) void emit(left);
+    else options.release(showing.card.id);
   };
 
   /**
@@ -304,9 +343,16 @@ export function createReviewSession(options: ReviewSessionOptions) {
         listeners.delete(listener);
       };
     },
-    /** Asks for the first card. */
+    /** Asks for the first card; after close(), starts over (a remounted screen reuses its session). */
     start() {
-      if (started || closed) return;
+      if (started && !closed) return;
+      if (closed) {
+        closed = false;
+        current = null;
+        more = false;
+        // Answers to the closed run's requests are dropped, and their counts too.
+        countsFrom = asked;
+      }
       started = true;
       load(ask());
     },
@@ -343,10 +389,12 @@ export function createReviewSession(options: ReviewSessionOptions) {
       const id = card.card.id;
       undelivered = [id, ...undelivered.filter((other) => other !== id)];
       // The card leaves at its grade, so it was on screen exactly that long.
-      const taken = emit({ ...report, grade, gradeMs: report.shownMs }).then((ok) => {
-        if (ok) undelivered = undelivered.filter((other) => other !== id);
+      // Excluded until its report leaves the queue, however late; the next card waits for that only so long.
+      const settled = emit({ ...report, grade, gradeMs: report.shownMs }).then(() => {
+        undelivered = undelivered.filter((other) => other !== id);
       });
-      delivered = Promise.all([delivered, taken]).then(() => undefined);
+      const waited = Promise.race([settled, options.sleep(REVIEW_DELIVERY_WAIT_MS)]);
+      delivered = Promise.all([delivered, waited]).then(() => undefined);
       setPhase(cardPhase(card));
       return true;
     },
@@ -380,7 +428,9 @@ export function createReviewSession(options: ReviewSessionOptions) {
       if (closed) return;
       leave();
       closed = true;
+      const dropped = prefetch;
       prefetch = null;
+      if (dropped !== null) void dropped.promise.then(drop);
       setPhase({ _tag: "closed" });
     },
   };
