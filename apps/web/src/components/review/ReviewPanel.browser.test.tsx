@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { AnnotationReportError, EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
@@ -16,13 +16,21 @@ type NextInput = {
 // The collector, through the client's own server: each command answers from its mock.
 const collector = vi.hoisted(() => ({
   next: vi.fn<(request: Request<NextInput>) => unknown>(),
-  report: vi.fn<(request: Request<{ items: ReadonlyArray<Record<string, unknown>> }>) => void>(),
+  report: vi.fn<(request: Request<{ items: ReadonlyArray<Record<string, unknown>> }>) => unknown>(),
 }));
 vi.mock(import("../../state/annotationInteractions"), async (original) => {
+  const { AnnotationReportError: ReportError } = await import("@t3tools/contracts");
+  const { fail } = await import("effect/Cause");
+  const { is } = await import("effect/Schema");
+  const isReportError = is(ReportError);
+  // An answer that is an AnnotationReportError fails the command with it.
   const command = <I,>(label: string, answer: (request: Request<I>) => unknown) =>
     ({
       label,
-      run: async (_registry: unknown, request: Request<I>) => AsyncResult.success(answer(request)),
+      run: async (_registry: unknown, request: Request<I>) => {
+        const value = answer(request);
+        return isReportError(value) ? AsyncResult.failure(fail(value)) : AsyncResult.success(value);
+      },
     }) as never;
   return {
     ...(await original()),
@@ -48,6 +56,7 @@ vi.mock(import("../../state/primaryEnvironment"), async () => {
 import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
 import { ReviewPanel } from "./ReviewPanel";
 import { ReviewPanelToggle } from "./ReviewPanelToggle";
+import { flushReviewOutbox, reportReview } from "../../state/annotationReview";
 
 const DAY = 86_400;
 const MONDAI = {
@@ -230,4 +239,87 @@ it("shows the cards due beside the header button, read with a peek that serves n
   });
   await userEvent.click(toggle);
   expect(onToggle).toHaveBeenCalledOnce();
+});
+
+const NOW = Date.UTC(2026, 10, 5, 12, 0);
+const DAY_MS = 86_400_000;
+
+/** A fixed clock for when reports were queued, with real timers. */
+function systemTime(now: number): Disposable {
+  vi.setSystemTime(now);
+  return { [Symbol.dispose]: () => void vi.useRealTimers() };
+}
+
+const graded = (uid: string) =>
+  ({
+    kind: "review",
+    at: NOW,
+    card: `card-${uid}`,
+    word: "問題",
+    revealMs: 900,
+    shownMs: 2_000,
+    grade: 3,
+    gradeMs: 2_000,
+    source: "desktop",
+    uid,
+  }) as const;
+
+const outbox = (environment: string) =>
+  JSON.parse(
+    localStorage.getItem(`t3code:annotation-review-outbox:v1:${environment}`) ?? "[]",
+  ) as Array<{
+    item: { uid: string };
+  }>;
+const sent = () =>
+  collector.report.mock.calls.map(([request]) => request.input.items.map((item) => item.uid));
+
+it("keeps a review report that may not have arrived across a reload, and sends it again under its uid", async () => {
+  using _clock = systemTime(NOW);
+  setup();
+  const environment = EnvironmentId.make("environment-outbox");
+  collector.report.mockReturnValueOnce(
+    new AnnotationReportError({ detail: "collector unreachable", retryable: true }),
+  );
+  expect(await reportReview(environment, graded("u1"))).toBe("failed");
+  expect(outbox(environment).map((entry) => entry.item.uid)).toEqual(["u1"]);
+
+  // After a reload only the outbox is left; the next start sends it again.
+  await flushReviewOutbox(environment);
+  expect(sent()).toEqual([["u1"], ["u1"]]);
+  expect(outbox(environment)).toEqual([]);
+});
+
+it("settles each report in a batch by index, and keeps only the newest 200 of the last 7 days", async () => {
+  using _clock = systemTime(NOW);
+  setup();
+  const environment = "environment-outbox-batch";
+  const queued = [
+    { item: graded("stale"), queuedAt: NOW - 8 * DAY_MS },
+    ...Array.from({ length: 202 }, (_, index) => ({
+      item: graded(`u${index}`),
+      queuedAt: NOW - 202 + index,
+    })),
+  ];
+  localStorage.setItem(`t3code:annotation-review-outbox:v1:${environment}`, JSON.stringify(queued));
+
+  collector.report.mockReturnValue(
+    new AnnotationReportError({ detail: "collector answered 502", retryable: true }),
+  );
+  await flushReviewOutbox(EnvironmentId.make(environment));
+  expect(sent()).toEqual([Array.from({ length: 50 }, (_, index) => `u${index + 2}`)]);
+  expect(outbox(environment)).toHaveLength(200);
+  expect(outbox(environment)[0]!.item.uid).toBe("u2");
+
+  // The collector refuses the second of each batch for good and stores the rest: nothing is left to send.
+  collector.report.mockReturnValue(
+    new AnnotationReportError({
+      detail: "collector rejected 1 of 50: card released unshown",
+      retryable: false,
+      rejected: [{ item: 1, error: "card released unshown" }],
+    }),
+  );
+  await flushReviewOutbox(EnvironmentId.make(environment));
+  expect(sent()).toHaveLength(5);
+  expect(outbox(environment)).toEqual([]);
+  expect(await reportReview(EnvironmentId.make(environment), graded("lone"))).toBe("stored");
 });
