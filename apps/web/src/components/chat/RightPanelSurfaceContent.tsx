@@ -24,6 +24,7 @@ import { PullRequestDetailPanel } from "../pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
 import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel";
+import { ReviewPanel } from "../review/ReviewPanel";
 
 const PreviewPanel = lazy(() =>
   import("../preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
@@ -168,6 +169,15 @@ export function RightPanelSurfaceContent(props: {
     }
     case "pull-requests":
       return <ThreadPullRequestsPanel threadRef={threadRef} />;
+    case "review":
+      // Keyed by thread, so switching threads leaves the card on screen as closing the panel does.
+      return (
+        <ReviewPanel
+          key={scopedThreadKey(threadRef)}
+          environmentId={props.environmentId}
+          visible={visible}
+        />
+      );
     case "side-chat":
       // Not lazy: revealing a suspended tiptap editor tears down its view and crashes the composer.
       return (
