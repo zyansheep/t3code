@@ -17,6 +17,7 @@ import { cn, randomUUID } from "~/lib/utils";
 import {
   fetchReviewCard,
   holdReviewCounts,
+  releaseReviewCards,
   reportReview,
   setReviewCounts,
 } from "~/state/annotationReview";
@@ -77,6 +78,7 @@ export function ReviewPanel(props: {
     const current = new ReviewSession({
       fetchNext: (input) => fetchReviewCard(environmentId, input),
       report: (item) => reportReview(environmentId, item),
+      release: (ids) => releaseReviewCards(environmentId, ids),
       onChange: (next) => changed(next),
       uid: randomUUID,
       now: () => Date.now(),

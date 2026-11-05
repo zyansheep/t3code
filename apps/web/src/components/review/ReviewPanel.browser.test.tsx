@@ -184,10 +184,14 @@ it("leaves keys typed in the composer alone", async () => {
   expect(reviews()).toEqual([]);
 });
 
-it("reports the card on screen as left, without a grade, when the panel closes", async () => {
-  setup({ card: MONDAI, counts: { new: 1, learning: 0, review: 0 } });
+it("reports the card on screen as left when the panel closes, and hands back the next one it never showed", async () => {
+  setup(
+    { card: MONDAI, counts: { new: 2, learning: 0, review: 0 } },
+    { card: KAISHA, counts: { new: 2, learning: 0, review: 0 } },
+  );
   await using screen = await render(renderPanel());
   await expectCardShown("問題");
+  await vi.waitFor(() => expect(collector.next).toHaveBeenCalledTimes(2));
   await userEvent.click(page.getByRole("button", { name: "Show answer" }));
   await expect.element(page.getByText("problem")).toBeVisible();
 
@@ -195,6 +199,13 @@ it("reports the card on screen as left, without a grade, when the panel closes",
   await vi.waitFor(() => expect(reviews()).toHaveLength(1));
   expect(reviews()[0]).toMatchObject({ card: "c1", revealMs: expect.any(Number) });
   expect(reviews()[0]).not.toHaveProperty("grade");
+
+  await screen.rerender(renderPanel(true));
+  await vi.waitFor(() => expect(collector.next).toHaveBeenCalledTimes(3));
+  expect(collector.next).toHaveBeenLastCalledWith({
+    environmentId: "environment-review",
+    input: { source: "desktop", exclude: [], release: ["c2"] },
+  });
 });
 
 it("shows the cards due beside the header button, read with a peek that serves no card", async () => {
