@@ -1,3 +1,4 @@
+import * as NodeFS from "node:fs";
 import { describe, expect, it } from "vite-plus/test";
 
 import { markdownWithHtml, parseMarkdownSource, type MarkdownNode } from "./markdownDocument";
@@ -432,5 +433,29 @@ describe("markdownAtLevel on markup the weave did not write", () => {
     const tail = 'The <abbr title="もんだい · problem" data-en="problem" data-on="1">問題';
     expect(at(tail, 0, true)).toBe("The problem");
     expect(at(tail, 1, true)).toBe("The 問題");
+  });
+});
+
+describe("markdownLevels on the phone", () => {
+  const source = NodeFS.readFileSync(new URL("./markdownLevels.ts", import.meta.url), "utf8");
+
+  it("uses no script properties, which Hermes may not compile", () => {
+    expect(source).not.toMatch(/scx=|\\p\{Script/);
+  });
+
+  it("takes as Japanese exactly the desktop's Han, Hiragana and Katakana by script extension", () => {
+    const listed = /const JAPANESE_SCRIPT = \[([^\]]*)\]/.exec(source)![1]!;
+    const ranges = [...listed.matchAll(/"([^"]*)"/g)]
+      .map((match) => match[1]!.replaceAll("\\\\", "\\"))
+      .join("");
+    const written = new RegExp(`^[${ranges}]$`, "u");
+    const desktop = /^[\p{scx=Han}\p{scx=Hira}\p{scx=Kana}]$/u;
+    const differ: number[] = [];
+    for (let code = 0; code <= 0x10ffff; code += 1) {
+      if (code >= 0xd800 && code <= 0xdfff) continue;
+      const char = String.fromCodePoint(code);
+      if (written.test(char) !== desktop.test(char)) differ.push(code);
+    }
+    expect(differ).toEqual([]);
   });
 });
