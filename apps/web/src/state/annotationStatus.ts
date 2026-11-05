@@ -36,6 +36,17 @@ export const englishOnlyAtom = Atom.family((environmentId: EnvironmentId | null)
   ).pipe(Atom.withLabel("annotation-english-only")),
 );
 
+/**
+ * The level chat messages render at, from -3 (no Japanese) to 3: English only renders as -3, and a server whose status
+ * is unknown as normal. A number, so only a change re-renders messages.
+ */
+export const chatLevelAtom = Atom.family((environmentId: EnvironmentId | null) =>
+  Atom.make((get) => {
+    const status = environmentId === null ? null : get(annotationStatusAtom(environmentId));
+    return status === null ? 0 : status.english.on ? -3 : status.intensity.level;
+  }).pipe(Atom.withLabel("annotation-level")),
+);
+
 const REFRESH_MS = 5 * 60_000;
 const RETRY_MS = 10_000;
 // setTimeout fires at once beyond a signed 32-bit delay.
@@ -59,29 +70,46 @@ function entry(environmentId: EnvironmentId): Watched {
   return watch;
 }
 
-/** Stores a status and turns English only off locally when it ends, without waiting for the next refresh. */
+/** The status as the collector would answer at `now`: English only and the level end when their time is up. */
+function statusAt(status: AnnotationStatus, now: number): AnnotationStatus {
+  const { english, intensity } = status;
+  return {
+    english:
+      english.on && english.until > 0 && english.until <= now
+        ? { on: false, until: 0, at: english.at }
+        : english,
+    intensity:
+      intensity.level !== 0 && intensity.until > 0 && intensity.until <= now
+        ? { level: 0, until: 0 }
+        : intensity,
+  };
+}
+
+/**
+ * Stores a status, and ends English only and the level locally when their time is up, so messages render at the new
+ * level without waiting for the next refresh.
+ */
 function setStatus(environmentId: EnvironmentId, status: AnnotationStatus | null) {
   const watch = entry(environmentId);
   if (watch.expiry) clearTimeout(watch.expiry);
   watch.expiry = null;
-  const english = status?.english;
-  if (status && english?.on && english.until > 0) {
-    const left = english.until - Date.now();
-    if (left <= 0) {
-      status = { ...status, english: { on: false, until: 0, at: english.at } };
-    } else {
-      watch.expiry = setTimeout(
-        () => {
-          watch.expiry = null;
-          const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
-          if (current?.english.until !== english.until) return;
-          setStatus(environmentId, { ...current, english: { ...current.english, on: false } });
-        },
-        Math.min(left, MAX_TIMEOUT_MS),
-      );
-    }
+  const now = Date.now();
+  const current = status && statusAt(status, now);
+  const ends = current
+    ? [current.english.on ? current.english.until : 0, current.intensity.until].filter(
+        (until) => until > now,
+      )
+    : [];
+  if (ends.length > 0) {
+    watch.expiry = setTimeout(
+      () => {
+        watch.expiry = null;
+        setStatus(environmentId, appAtomRegistry.get(annotationStatusAtom(environmentId)));
+      },
+      Math.min(Math.min(...ends) - now, MAX_TIMEOUT_MS),
+    );
   }
-  appAtomRegistry.set(annotationStatusAtom(environmentId), status);
+  appAtomRegistry.set(annotationStatusAtom(environmentId), current);
 }
 
 function failureReason(result: AtomCommandResult<unknown, unknown>): string | null {

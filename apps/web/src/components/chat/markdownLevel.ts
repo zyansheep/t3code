@@ -7,6 +7,7 @@ type HastNode = {
 };
 
 const SENTENCE_MARK = /^[。？！?!]+$/u;
+const THRESHOLD = /^-?\d+$/;
 // Other abbreviations, like CSP, are English already.
 const JAPANESE = /[\p{scx=Han}\p{scx=Hira}\p{scx=Kana}]/u;
 // An English sentence's end in text: its stop, any closing quotes or brackets, then a space.
@@ -94,7 +95,57 @@ function toEnglish(node: HastNode): void {
   });
 }
 
-/** English only: glossed words show their meaning and glossed sentences their translation, as plain text. */
-export function rehypeEnglishOnly() {
-  return toEnglish;
+/** The lowest level an element shows at (`data-on`), or `null` for markup without levels. */
+function threshold(node: HastNode): number | null {
+  const value = node.properties?.dataOn;
+  return typeof value === "string" && THRESHOLD.test(value) ? Number(value) : null;
+}
+
+/** What a node renders as at `level`: itself, nothing, or the English a Japanese word stands for. */
+function atLevel(node: HastNode, level: number): HastNode[] {
+  const on = threshold(node);
+  if (on !== null) {
+    const shown = level >= on;
+    const twin = node.properties?.dataJw;
+    const english = node.properties?.dataEn;
+    if (node.tagName === "span" && (twin === "ja" || twin === "en")) {
+      if (shown !== (twin === "ja")) return [];
+    } else if (node.tagName === "abbr" && typeof english === "string" && !shown) {
+      return [{ type: "text", value: english }];
+    }
+  }
+  if (!node.children || KEPT.has(node.tagName ?? "")) return [node];
+  const children: HastNode[] = [];
+  // A word's English joins the text around it, so English only finds sentence ends in one text node.
+  for (const child of node.children.flatMap((child) => atLevel(child, level))) {
+    const previous = children.at(-1);
+    if (child.type === "text" && previous?.type === "text") {
+      children[children.length - 1] = {
+        type: "text",
+        value: (previous.value ?? "") + (child.value ?? ""),
+      };
+    } else children.push(child);
+  }
+  node.children = children;
+  return [node];
+}
+
+interface ChatLevel {
+  /** The chat level, from -3 (no Japanese) to 3. */
+  readonly level: number;
+  /** English only, which also turns glosses in messages without levels into English. */
+  readonly englishOnly: boolean;
+}
+
+/**
+ * Renders a chat message at a level. A swapped word (`<abbr data-en data-on>`) stays a gloss at or above its threshold
+ * and is its English below it; a sentence's twins (`<span data-jw="ja|en" data-on>`) show the Japanese at or above it
+ * and the English below it. Markup without `data-on` renders as written, except that in English only glossed words
+ * show their meaning and glossed sentences their translation, as plain text.
+ */
+export function rehypeChatLevel({ level, englishOnly }: ChatLevel) {
+  return (tree: HastNode) => {
+    atLevel(tree, level);
+    if (englishOnly) toEnglish(tree);
+  };
 }
