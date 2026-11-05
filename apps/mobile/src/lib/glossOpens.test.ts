@@ -1,12 +1,24 @@
-import { AnnotationInteractionsReportInput, AnnotationInteraction } from "@t3tools/contracts";
+import {
+  AnnotationEnglishSetInput,
+  AnnotationInteractionsReportInput,
+  AnnotationInteraction,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { createGlossOpenQueue, fnv1a32, glossOpenItem, type QueuedGlossOpen } from "./glossOpens";
+import {
+  createGlossOpenQueue,
+  fnv1a32,
+  glossContextId,
+  glossContextsOf,
+  glossOpenItem,
+  type QueuedGlossOpen,
+} from "./glossOpens";
 
 const NOW = 1_800_000_000_000;
 const isItem = Schema.is(AnnotationInteraction);
 const decodeReport = Schema.decodeUnknownSync(AnnotationInteractionsReportInput);
+const decodeEnglish = Schema.decodeUnknownSync(AnnotationEnglishSetInput);
 
 const open = (sequence: number, word = "mondai", at = NOW) =>
   glossOpenItem({ session: "s1", sequence, messageText: "raw text", word, at })!;
@@ -80,6 +92,25 @@ describe("glossOpenItem", () => {
     expect(
       glossOpenItem({ session: "s", sequence: 1, messageText: "", word: "x".repeat(41), at: NOW }),
     ).toBe(null);
+  });
+});
+
+describe("glossContextsOf", () => {
+  it("names the messages on screen by the views and context of their reported opens, as the collector has them", () => {
+    const opens = [
+      glossOpenItem({ session: "s1", sequence: 1, messageText: "first", word: "mondai", at: NOW })!,
+      glossOpenItem({ session: "s1", sequence: 2, messageText: "first", word: "moshi", at: NOW })!,
+      glossOpenItem({ session: "s1", sequence: 3, messageText: "second", word: "ima", at: NOW })!,
+    ];
+    const opened = new Map<string, Set<string>>();
+    for (const item of opens) {
+      opened.set(item.context, (opened.get(item.context) ?? new Set()).add(item.view));
+    }
+    const onScreen = ["first", "never opened", "second"].map(glossContextId);
+    const contexts = glossContextsOf(onScreen, opened);
+    expect(contexts).toEqual(opens.map(({ view, context }) => ({ view, context })));
+    expect(() => decodeEnglish({ on: true, contexts })).not.toThrow();
+    expect(glossContextsOf(Array(40).fill(opens[0]!.context), opened)).toHaveLength(30);
   });
 });
 
