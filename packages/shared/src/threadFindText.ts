@@ -120,7 +120,7 @@ function markdownThreadFindText(
       ? assistantBreaksProcessor
       : assistantProcessor;
   const tree = processor.runSync(processor.parse(markdown));
-  if (level) rehypeChatLevel(level)(tree, { value: markdown });
+  if (level) rehypeChatLevel(level)(tree);
   const paths = [
     ...extractMarkdownLinkHrefs(renderCodexInlineDirectivesAsMarkdown(markdown)),
     ...extractInlineCodeSpans(markdown).flatMap((span) => inlineCodeFilePathCandidate(span) ?? []),

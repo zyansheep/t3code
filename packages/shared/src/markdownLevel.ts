@@ -9,9 +9,6 @@ type HastNode = {
 const SENTENCE_MARK = /^[。？！?!]+$/u;
 // The thresholds the contract allows; any other data-on renders its element as written.
 const THRESHOLD = /^(?:-2|-1|0|1|2|3)$/;
-const TWIN_OPEN = /<span\b[^>]*\sdata-jw=[^>]*>/giu;
-const SPAN_CLOSE = /<\/span\s*>/iu;
-const BLANK_LINE = /\n[ \t]*\n/u;
 // Other abbreviations, like CSP, are English already.
 const JAPANESE = /[\p{scx=Han}\p{scx=Hira}\p{scx=Kana}]/u;
 // An English sentence's end in text: its stop, any closing quotes or brackets, then a space.
@@ -130,23 +127,6 @@ function twinsIn(parent: HastNode, out: Twin[] = [], nested = false): Twin[] {
 
 const isBlank = (node: HastNode) => node.type === "text" && (node.value ?? "").trim() === "";
 
-/**
- * How the twin spans in the source end: whether one holds a blank line or never closes (markdown splits it apart), and
- * whether the last one is still open at the end, which while a reply streams is its tail.
- */
-function twinSpansInSource(source: string) {
-  const opens = [...source.matchAll(TWIN_OPEN)];
-  let split = false;
-  let openAtEnd = 0;
-  for (const open of opens) {
-    const rest = source.slice(open.index + open[0].length);
-    const end = rest.search(SPAN_CLOSE);
-    if (end === -1) openAtEnd += 1;
-    else if (BLANK_LINE.test(rest.slice(0, end))) split = true;
-  }
-  return { split, openAtEnd };
-}
-
 /** The translation of the Japanese twin's last sentence mark (`<abbr title="translation">。</abbr>`). */
 function lastSentenceTranslation(node: HastNode): string {
   let translation = "";
@@ -158,12 +138,37 @@ function lastSentenceTranslation(node: HastNode): string {
   return translation;
 }
 
+/** Whether an element was left open (see `rehypeMarkLevelTags`) in a way that breaks it, not as a streaming tail. */
+const leftOpen = (node: HastNode, streaming: boolean) => {
+  const open = node.properties?.dataUnclosed;
+  return open === "block" || (open === "end" && !streaming);
+};
+
+/**
+ * An HTML parser puts an English twin inside a Japanese one left open before it; the Japanese twin ends where the
+ * English one starts instead, so they pair.
+ */
+function closeOpenJapaneseTwins(node: HastNode) {
+  const children = node.children;
+  if (!children || KEPT.has(node.tagName ?? "")) return;
+  for (let index = 0; index < children.length; index += 1) {
+    const child = children[index]!;
+    closeOpenJapaneseTwins(child);
+    if (child.properties?.dataJw !== "ja" || child.properties.dataUnclosed === undefined) continue;
+    const inner = child.children ?? [];
+    const english = inner.findIndex((node) => node.properties?.dataJw === "en");
+    if (english === -1) continue;
+    children.splice(index + 1, 0, ...inner.splice(english));
+  }
+}
+
 /**
  * The twins of a message: a Japanese span pairs with the English span right after it (only whitespace between) with
- * the same threshold. A finished message with nested twins or a twin split apart or left open is broken; while a reply
- * streams, the last twin may still be open, as its tail.
+ * the same threshold. A finished message with nested twins or a twin left open is broken; while a reply streams, the
+ * twins open at its end are its tail.
  */
-function readTwins(tree: HastNode, source: string, streaming: boolean) {
+function readTwins(tree: HastNode, streaming: boolean) {
+  closeOpenJapaneseTwins(tree);
   const twins = twinsIn(tree);
   const byNode = new Map(twins.map((twin) => [twin.node, twin]));
   const partners = new Map<HastNode, HastNode>();
@@ -171,24 +176,26 @@ function readTwins(tree: HastNode, source: string, streaming: boolean) {
     if (!twin.ja) continue;
     const next = (twin.parent.children ?? []).slice(twin.index + 1).find((node) => !isBlank(node));
     const en = next && byNode.get(next);
-    if (en && !en.ja && en.on === twin.on) partners.set(twin.node, en.node);
+    if (en && !en.ja && en.on === twin.on && en.node.properties?.dataApart === undefined) {
+      partners.set(twin.node, en.node);
+    }
   }
-  const { split, openAtEnd } = twins.length > 0 ? twinSpansInSource(source) : NO_SPANS;
-  const tail = streaming && openAtEnd === 1 ? (twins.at(-1)?.node ?? null) : null;
-  const broken =
-    split || openAtEnd > (tail ? 1 : 0) || twins.some((twin) => twin.nested && twin.node !== tail);
-  return { byNode, twins, partners, tail, broken };
+  const tails = new Set(
+    twins.filter((twin) => streaming && twin.node.properties?.dataUnclosed === "end"),
+  );
+  const broken = twins.some(
+    (twin) => leftOpen(twin.node, streaming) || (twin.nested && !tails.has(twin)),
+  );
+  return { byNode, twins, partners, tails, broken };
 }
-
-const NO_SPANS = { split: false, openAtEnd: 0 };
 
 /**
  * Renders a tree at `level`: a pair by its threshold (its English twin in a broken message), a lone English twin always,
  * a lone Japanese twin at its threshold and below it as its last sentence mark's translation. In a broken message a
  * hidden Japanese twin also hides all up to the next English twin, so a split span leaves no Japanese behind.
  */
-function renderAt(tree: HastNode, level: number, source: string, streaming: boolean) {
-  const { byNode, twins, partners, tail, broken } = readTwins(tree, source, streaming);
+function renderAt(tree: HastNode, level: number, streaming: boolean) {
+  const { byNode, twins, partners, tails, broken } = readTwins(tree, streaming);
   const paired = new Set(partners.values());
   const nextEnglish = (twin: Twin) =>
     twins.slice(twins.indexOf(twin) + 1).find((next) => !next.ja && next.on === twin.on)?.node ??
@@ -214,7 +221,7 @@ function renderAt(tree: HastNode, level: number, source: string, streaming: bool
     const node = twin.node;
     if (partners.has(node)) return !broken && level >= twin.on ? [withChildren(node)] : [];
     if (level >= twin.on) return [withChildren(node)];
-    if (node === tail) return [];
+    if (tails.has(twin)) return [];
     const translation = lastSentenceTranslation(node);
     hiddenUntil = broken ? nextEnglish(twin) : null;
     // Hiding, its children keep only an English twin an unclosed span took in, and what follows it.
@@ -235,7 +242,13 @@ function renderAt(tree: HastNode, level: number, source: string, streaming: bool
       return kept.children!.length > 0 ? [kept] : [];
     }
     const on = threshold(node);
-    if (node.tagName === "abbr" && on !== null && level < on) {
+    // A word still arriving at the end of a streaming reply is plain text until it closes.
+    const arriving = streaming && node.properties?.dataUnclosed === "end";
+    if (node.tagName === "abbr" && arriving && (on === null || level >= on)) {
+      return withChildren(node).children ?? [];
+    }
+    // A word left open in a finished message renders as written.
+    if (node.tagName === "abbr" && on !== null && level < on && !leftOpen(node, streaming)) {
       const english = node.properties?.dataEn;
       const meaning = (typeof english === "string" && english) || glossMeaning(glossTitle(node));
       if (meaning !== "") return [{ type: "text", value: meaning }];
@@ -296,9 +309,102 @@ export interface ChatLevel {
  * glossed words show their meaning and glossed sentences their translation, as plain text.
  */
 export function rehypeChatLevel({ level, englishOnly, streaming = false }: ChatLevel) {
-  return (tree: HastNode, file?: { value?: unknown }) => {
+  return (tree: HastNode) => {
     if (streaming) dropPartialTag(tree);
-    renderAt(tree, level, String(file?.value ?? ""), streaming);
+    renderAt(tree, level, streaming);
     if (englishOnly) toEnglish(tree);
   };
+}
+
+const LEVEL_TAG = /<(\/?)(abbr|span)\b([^>]*?)(\/?)>/giu;
+const LEVEL_ATTRIBUTE = /\sdata-(?:on|jw)\s*=/iu;
+const COMMENT = /^\s*<!--[\s\S]*-->\s*$/u;
+const CLOSE_SPAN = /^\s*<\/span\s*>\s*$/iu;
+const OPEN_SPAN = /^\s*<span\b/iu;
+const RAW_BLOCKS = new Set(["p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "td", "th", "dt", "dd"]);
+
+interface OpenTag {
+  readonly raw: HastNode;
+  /** Where its `>` is in the raw HTML. */
+  readonly end: number;
+  readonly name: string;
+  readonly leveled: boolean;
+}
+
+/**
+ * Before the HTML parser: marks each abbr, and each span with levels, that its block leaves open (`data-unclosed`: "end" in the
+ * message's last block, else "block"), drops a self-closing abbr or level span, which would take in the rest of its
+ * block, and marks a span right after a closing span and a comment `data-apart`, so twins a comment separates don't pair.
+ */
+export function rehypeMarkLevelTags() {
+  return (tree: HastNode) => {
+    const blocks = new Map<HastNode, HastNode[]>();
+    let lastBlock: HastNode | null = null;
+    const visit = (node: HastNode, block: HastNode | null) => {
+      if (KEPT.has(node.tagName ?? "")) return;
+      const children = node.children ?? [];
+      children.forEach((child, index) => {
+        if (child.type === "raw" && COMMENT.test(child.value ?? "")) {
+          const previous = children.slice(0, index).findLast((sibling) => !isBlank(sibling));
+          const next = children.slice(index + 1).find((sibling) => !isBlank(sibling));
+          if (
+            previous?.type === "raw" &&
+            CLOSE_SPAN.test(previous.value ?? "") &&
+            next?.type === "raw"
+          ) {
+            next.value = (next.value ?? "").replace(OPEN_SPAN, '$& data-apart=""');
+          }
+        }
+        const own = RAW_BLOCKS.has(child.tagName ?? "") ? child : block;
+        if (child.type === "raw") {
+          const key = own ?? child;
+          blocks.set(key, [...(blocks.get(key) ?? []), child]);
+        }
+        if ((child.type === "raw" || child.type === "text") && !isBlank(child)) {
+          lastBlock = own ?? child;
+        }
+        visit(child, own);
+      });
+    };
+    visit(tree, null);
+    for (const [block, raws] of blocks) {
+      if (!raws.some((raw) => raw.value?.includes("<"))) continue;
+      markBlock(raws, block === lastBlock ? "end" : "block");
+    }
+  };
+}
+
+function markBlock(raws: HastNode[], unclosed: "end" | "block") {
+  const stack: OpenTag[] = [];
+  const edits = new Map<HastNode, Array<{ start: number; end: number; text: string }>>();
+  const edit = (raw: HastNode, start: number, end: number, text: string) =>
+    edits.set(raw, [...(edits.get(raw) ?? []), { start, end, text }]);
+  const markOpen = (tag: OpenTag, how: "end" | "block") => {
+    if (tag.leveled || tag.name === "abbr")
+      edit(tag.raw, tag.end, tag.end, ` data-unclosed="${how}"`);
+  };
+  for (const raw of raws) {
+    for (const match of (raw.value ?? "").matchAll(LEVEL_TAG)) {
+      const [whole, closing, tagName, attributes, selfClosing] = match;
+      const name = tagName!.toLowerCase();
+      const leveled = LEVEL_ATTRIBUTE.test(attributes ?? "");
+      if (selfClosing) {
+        if (name === "abbr" || leveled) edit(raw, match.index, match.index + whole.length, "");
+      } else if (!closing) {
+        stack.push({ raw, end: match.index + whole.length - 1, name, leveled });
+      } else {
+        const open = stack.findLastIndex((tag) => tag.name === name);
+        // The HTML parser closes what is still open inside the matching tag with it.
+        if (open !== -1) for (const tag of stack.splice(open).slice(1)) markOpen(tag, "block");
+      }
+    }
+  }
+  for (const tag of stack) markOpen(tag, unclosed);
+  for (const [raw, changes] of edits) {
+    let value = raw.value ?? "";
+    for (const change of [...changes].sort((a, b) => b.start - a.start)) {
+      value = value.slice(0, change.start) + change.text + value.slice(change.end);
+    }
+    raw.value = value;
+  }
 }
