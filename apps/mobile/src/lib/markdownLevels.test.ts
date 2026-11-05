@@ -234,42 +234,156 @@ describe("markdownAtLevel", () => {
     expect(at('A <abbr title="あめ · rain / shower" data-on="1">雨</abbr>.', 0)).toBe("A rain.");
   });
 
-  it("hides a twin still streaming in by its threshold", () => {
+  it("follows a twin's threshold while it is still streaming in at the end", () => {
     const streaming = 'Hi. <span data-jw="ja" data-on="2"><abbr title="あめ · rain">雨</abbr>で';
     expect(at(streaming, 1, true)).toBe("Hi. ");
     expect(at(streaming, 2, true)).toBe(`Hi. ${gloss("雨", "あめ · rain")}で`);
     const english = `${streaming}<abbr title="Rain.">。</abbr></span><span data-jw="en" data-on="2">It is ra`;
     expect(at(english, 1, true)).toBe("Hi. It is ra");
     expect(at(english, 2, true)).toBe(`Hi. ${gloss("雨", "あめ · rain")}で${gloss("。", "Rain.")}`);
-    // Only at the end of what has come: a twin left open in an earlier paragraph is broken, not streaming.
-    expect(at(`${streaming}\n\nMore`, 1, true)).toBe(`Hi. ${gloss("雨", "あめ · rain")}で\n\nMore`);
+    // Its English twin not yet come, a finished Japanese one below its threshold shows its translation.
+    const before = `${streaming}<abbr title="Rain.">。</abbr></span><span data-jw`;
+    expect(at(before, 1, true)).toBe("Hi. Rain.");
+    // Only at the end: a twin left open in an earlier paragraph is broken, so never Japanese below its threshold.
+    expect(at(`${streaming}\n\nMore`, 1, true)).toBe("Hi. \n\nMore");
+  });
+});
+
+// The rule the desktop shares for markup the weave did not write, from the review's corpus.
+const TODAY_RAIN =
+  '<abbr title="きょう · today">今日</abbr>は<abbr title="あめ · rain">雨</abbr>です<abbr title="It is raining today.">。</abbr>';
+const ja = (on: string, inner = TODAY_RAIN) => `<span data-jw="ja" data-on="${on}">${inner}</span>`;
+const en = (on: string, inner = "It is raining today.") =>
+  `<span data-jw="en" data-on="${on}">${inner}</span>`;
+const JA_TEXT = "今日は雨です。";
+const EN_TEXT = "It is raining today.";
+
+/** What a reader sees at a level: glosses as their words, whitespace as one space. */
+const seen = (markdown: string, level: number) =>
+  at(markdown, level)
+    .replace(/\[([^\]]*)\]\(<t3-gloss:[^>]*>\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+
+describe("markdownAtLevel on markup the weave did not write", () => {
+  const cases: ReadonlyArray<{
+    readonly name: string;
+    readonly markdown: string;
+    /** What shows below the threshold (1) and at it. */
+    readonly below: string;
+    readonly at: string;
+  }> = [
+    { name: "a pair", markdown: ja("1") + en("1"), below: EN_TEXT, at: JA_TEXT },
+    {
+      name: "a pair a line apart",
+      markdown: `${ja("1")}\n${en("1")}`,
+      below: EN_TEXT,
+      at: JA_TEXT,
+    },
+    {
+      name: "a pair a no-break space apart",
+      markdown: `${ja("1")} ${en("1")}`,
+      below: EN_TEXT,
+      at: JA_TEXT,
+    },
+    {
+      name: "twins a blank line apart, two orphans",
+      markdown: `${ja("1")}\n\n${en("1")}`,
+      below: `${EN_TEXT} ${EN_TEXT}`,
+      at: `${JA_TEXT} ${EN_TEXT}`,
+    },
+    {
+      name: "twins with a comment between, two orphans",
+      markdown: `${ja("1")}<!-- c -->${en("1")}`,
+      below: `${EN_TEXT}${EN_TEXT}`,
+      at: `${JA_TEXT}${EN_TEXT}`,
+    },
+    {
+      name: "an English twin alone, always shown",
+      markdown: `Intro. ${en("1")} Outro.`,
+      below: `Intro. ${EN_TEXT} Outro.`,
+      at: `Intro. ${EN_TEXT} Outro.`,
+    },
+    {
+      name: "a Japanese twin alone, its translation below",
+      markdown: `Intro. ${ja("1")} Outro.`,
+      below: `Intro. ${EN_TEXT} Outro.`,
+      at: `Intro. ${JA_TEXT} Outro.`,
+    },
+    {
+      name: "a Japanese twin alone with no sentence mark, gone below",
+      markdown: `Intro. ${ja("1", "今日は雨です")} Outro.`,
+      below: "Intro. Outro.",
+      at: "Intro. 今日は雨です Outro.",
+    },
+    {
+      name: "twins at different thresholds, two orphans",
+      markdown: ja("1") + en("2"),
+      below: `${EN_TEXT}${EN_TEXT}`,
+      at: `${JA_TEXT}${EN_TEXT}`,
+    },
+    {
+      name: "English before Japanese, two orphans",
+      markdown: en("1") + ja("1"),
+      below: `${EN_TEXT}${EN_TEXT}`,
+      at: `${EN_TEXT}${JA_TEXT}`,
+    },
+    {
+      name: "a blank line inside a Japanese twin: every pair English",
+      markdown: `${ja("1", "今日は\n\n雨です。")}${en("1")} ${ja("1")}${en("1")}`,
+      below: `${EN_TEXT} ${EN_TEXT}`,
+      at: `${EN_TEXT} ${EN_TEXT}`,
+    },
+    {
+      name: "a blank line inside an English twin: every pair English",
+      markdown: ja("1") + en("1", "It is\n\nraining."),
+      below: "It is raining.",
+      at: "It is raining.",
+    },
+    {
+      name: "a Japanese twin left open: it ends at its English twin, and every pair is English",
+      markdown: `Intro. <span data-jw="ja" data-on="1">今日は雨です。${en("1")} Outro.`,
+      below: `Intro. ${EN_TEXT} Outro.`,
+      at: `Intro. ${EN_TEXT} Outro.`,
+    },
+    {
+      name: "an English twin left open: shown to its block's end, every pair English",
+      markdown: `Intro. ${ja("1")}<span data-jw="en" data-on="1">It is raining. Outro.\n\nNext.`,
+      below: "Intro. It is raining. Outro. Next.",
+      at: "Intro. It is raining. Outro. Next.",
+    },
+    {
+      name: "a Japanese twin left open alone: its translation to its block's end below",
+      markdown: `Intro. <span data-jw="ja" data-on="1">${TODAY_RAIN} Outro.\n\nNext.`,
+      below: `Intro. ${EN_TEXT} Next.`,
+      at: `Intro. ${JA_TEXT} Outro. Next.`,
+    },
+    {
+      name: "nested twins: every pair English",
+      markdown: `${ja("1", `外 ${ja("2")}${en("2")}`)}${en("1", "outer")}`,
+      below: "outer",
+      at: "outer",
+    },
+    {
+      name: "a twin of no kind the contract has, as written; the English one after it alone",
+      markdown: `<span data-jw="JA" data-on="1">${JA_TEXT}</span>${en("1")}`,
+      below: `${JA_TEXT}${EN_TEXT}`,
+      at: `${JA_TEXT}${EN_TEXT}`,
+    },
+  ];
+  it.each(cases)("$name", ({ markdown, below, at: shown }) => {
+    for (const level of [-3, -2, -1, 0]) expect(seen(markdown, level)).toBe(below);
+    for (const level of [1, 2, 3]) expect(seen(markdown, level)).toBe(shown);
   });
 
-  it("fails safe on broken twins: English below the threshold, and never cuts the text after them", () => {
-    const rain = gloss("雨", "あめ · rain");
-    // A blank line inside a twin keeps it one twin.
-    const blankJapanese =
-      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>。\n\n<abbr title="あめ · rain">雨</abbr>。</span><span data-jw="en" data-on="1">Rain. Rain.</span> After.';
-    expect(at(blankJapanese, 0)).toBe("Rain. Rain. After.");
-    expect(at(blankJapanese, 1)).toBe(`${rain}。\n\n${rain}。 After.`);
-    const blankEnglish =
-      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>。</span><span data-jw="en" data-on="1">Rain.\n\nRain.</span> After.';
-    expect(at(blankEnglish, 0)).toBe("Rain.\n\nRain. After.");
-    expect(at(blankEnglish, 1)).toBe(`${rain}。 After.`);
+  it("shows a swapped word with empty English as its gloss's meaning", () => {
+    const empty =
+      'The <abbr title="もんだい · problem / issue" data-en="" data-on="1">問題</abbr> is small.';
+    expect(seen(empty, 0)).toBe("The problem is small.");
+    expect(seen(empty, 1)).toBe("The 問題 is small.");
+  });
 
-    // A Japanese twin left open ends where its English twin starts.
-    const openJapanese =
-      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>。<span data-jw="en" data-on="1">Rain.</span> After.\n\nNext.';
-    expect(at(openJapanese, 0)).toBe("Rain. After.\n\nNext.");
-    expect(at(openJapanese, 1)).toBe(`${rain}。 After.\n\nNext.`);
-    // An English twin left open shows at every level, and its Japanese twin goes.
-    const openEnglish =
-      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>。</span><span data-jw="en" data-on="1">Rain. After.\n\nNext.';
-    for (const level of LEVELS) expect(at(openEnglish, level)).toBe("Rain. After.\n\nNext.");
-    // A Japanese twin left open with no English stays as written rather than cut what follows.
-    const alone = 'Hi. <span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>。 After.';
-    expect(at(alone, 0)).toBe(`Hi. ${rain}。 After.`);
-    // A word left open stays as written too.
+  it("leaves a word left open in a finished message as written", () => {
     const word = 'A <abbr title="あめ · rain" data-en="rain" data-on="1">雨 after.';
     expect(at(word, 0)).toBe("A 雨 after.");
   });
