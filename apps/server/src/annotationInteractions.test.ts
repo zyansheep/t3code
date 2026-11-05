@@ -129,22 +129,19 @@ describe("forwardAnnotationInteractions", () => {
     "fails a batch with review items the collector does not store, saying if a resend can help",
     () =>
       Effect.gen(function* () {
-        const graded = decodeReport({
-          items: [
-            {
-              kind: "review",
-              at: 1_800_000_000_000,
-              card: "c42",
-              word: "問題",
-              revealMs: 1_200,
-              shownMs: 3_000,
-              grade: 3,
-              gradeMs: 3_000,
-              source: "desktop",
-              uid: "review-2",
-            },
-          ],
-        });
+        const review = {
+          kind: "review",
+          at: 1_800_000_000_000,
+          card: "c42",
+          word: "問題",
+          revealMs: 1_200,
+          shownMs: 3_000,
+          grade: 3,
+          gradeMs: 3_000,
+          source: "desktop",
+          uid: "review-2",
+        } as const;
+        const graded = decodeReport({ items: [review] });
         const failure = (answer: { readonly status: number; readonly body: unknown } | null) =>
           Effect.flip(collectorWith(forwardAnnotationInteractions(graded), configured, answer).run);
         const down = yield* failure(null);
@@ -154,14 +151,55 @@ describe("forwardAnnotationInteractions", () => {
         );
         const broken = yield* failure({ status: 500, body: { ok: false } });
         assert.deepStrictEqual([broken.detail, broken.retryable], ["collector answered 500", true]);
+        // Without reasons, every review item counts as rejected.
         const rejected = yield* failure({
           status: 200,
           body: { ok: true, stored: 0, duplicates: 0, rejected: 1 },
         });
         assert.deepStrictEqual(
-          [rejected.detail, rejected.retryable],
-          ["collector rejected 1 of 1", false],
+          [rejected.detail, rejected.retryable, rejected.rejected],
+          ["collector rejected 1 of 1: rejected", false, [{ item: 0, error: "rejected" }]],
         );
+
+        // With reasons, only the review items they name: the rest of the batch was stored.
+        const mixed = decodeReport({
+          items: [peek, review, { ...review, card: "c43", uid: "review-3" }],
+        });
+        const named = yield* Effect.flip(
+          collectorWith(forwardAnnotationInteractions(mixed), configured, {
+            status: 200,
+            body: {
+              ok: true,
+              stored: 1,
+              duplicates: 0,
+              rejected: 2,
+              reasons: [
+                { item: 0, error: "malformed" },
+                { item: 2, error: "shownMs over a day" },
+              ],
+            },
+          }).run,
+        );
+        assert.deepStrictEqual(
+          [named.detail, named.retryable, named.rejected],
+          [
+            "collector rejected 1 of 3: shownMs over a day",
+            false,
+            [{ item: 2, error: "shownMs over a day" }],
+          ],
+        );
+        // Ignored items, and a rejected reading report, are no failure.
+        yield* collectorWith(forwardAnnotationInteractions(mixed), configured, {
+          status: 200,
+          body: {
+            ok: true,
+            stored: 2,
+            duplicates: 0,
+            ignored: 1,
+            rejected: 1,
+            reasons: [{ item: 0, error: "malformed" }],
+          },
+        }).run;
         // A resend the collector already has is a duplicate, which is stored.
         const resent = collectorWith(forwardAnnotationInteractions(graded), configured, {
           status: 200,
