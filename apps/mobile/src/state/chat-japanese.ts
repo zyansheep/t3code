@@ -223,7 +223,12 @@ export async function stepAnnotationLevel(
     const reason = failureReason(result);
     return reason === null ? null : { ok: false, reason };
   }
+  // The collector answered, so it is there: a press before its status was known still shows, and English only is read.
   const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
-  if (current) setStatus(environmentId, { ...current, intensity: result.value });
+  setStatus(environmentId, {
+    english: current?.english ?? { on: false, until: 0, at: 0 },
+    intensity: result.value,
+  });
+  if (current === null) void refreshAnnotationStatus(environmentId);
   return { ok: true, value: result.value };
 }
