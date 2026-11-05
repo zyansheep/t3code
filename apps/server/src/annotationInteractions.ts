@@ -5,6 +5,7 @@ import {
   type AnnotationIntensityAdjustInput,
   AnnotationIntensityError,
   type AnnotationInteractionsReportInput,
+  AnnotationReportError,
   AnnotationReviewCard,
   AnnotationReviewError,
   type AnnotationReviewNextInput,
@@ -15,31 +16,65 @@ import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 
 /** Where chat `<abbr>` popover interactions go: an external collector, for example a language-learning tool. */
 const AnnotationEventsUrl = Config.String("T3CODE_ANNOTATION_EVENTS_URL").pipe(
   Config.withDefault(""),
 );
 
-/**
- * Forwards popover interactions from chat clients to `T3CODE_ANNOTATION_EVENTS_URL` as
- * `{"surface": "t3", "items": [...]}`. Best effort: unset means off, and a slow or failing collector never fails the
- * client's request. The server forwards rather than the client, because clients may be remote.
- */
-export const forwardAnnotationInteractions = Effect.fn("forwardAnnotationInteractions")(
-  function* (input: AnnotationInteractionsReportInput) {
-    const url = (yield* AnnotationEventsUrl).trim();
-    if (url === "" || input.items.length === 0) return;
+const isReportError = Schema.is(AnnotationReportError);
+const decodeReportAnswer = Schema.decodeUnknownOption(
+  Schema.Struct({ rejected: Schema.optional(Schema.Finite) }),
+);
+
+/** Posts `items` to the collector; fails when it cannot be reached, fails, or rejects any of them. */
+const postInteractions = Effect.fn("postInteractions")(
+  function* (url: string, input: AnnotationInteractionsReportInput) {
     const client = yield* HttpClient.HttpClient;
     const request = yield* HttpClientRequest.post(url).pipe(
       HttpClientRequest.bodyJson({ surface: "t3", items: input.items }),
     );
-    yield* HttpClientResponse.filterStatusOk(yield* client.execute(request));
+    const response = yield* client.execute(request);
+    if (response.status !== 200) {
+      return yield* new AnnotationReportError({
+        detail: `collector answered ${response.status}`,
+        retryable: true,
+      });
+    }
+    const answer = Option.getOrUndefined(
+      Option.flatMap(yield* Effect.option(response.json), decodeReportAnswer),
+    );
+    const rejected = answer?.rejected ?? 0;
+    if (rejected > 0) {
+      return yield* new AnnotationReportError({
+        detail: `collector rejected ${rejected} of ${input.items.length}`,
+        retryable: false,
+      });
+    }
   },
   Effect.timeout("5 seconds"),
-  Effect.ignore(),
+  Effect.mapError((error) =>
+    isReportError(error)
+      ? error
+      : new AnnotationReportError({ detail: "collector unreachable", retryable: true }),
+  ),
 );
+
+/**
+ * Forwards chat clients' annotation interactions to `T3CODE_ANNOTATION_EVENTS_URL` as `{"surface": "t3", "items"}`
+ * (the server forwards because clients may be remote). Unset means off. Reading reports are best effort; a batch with
+ * review items, whose grades schedule cards, fails with an `AnnotationReportError` when the collector does not store it.
+ */
+export const forwardAnnotationInteractions = Effect.fn("forwardAnnotationInteractions")(function* (
+  input: AnnotationInteractionsReportInput,
+) {
+  const url = (yield* Effect.orElseSucceed(AnnotationEventsUrl, () => "")).trim();
+  if (url === "" || input.items.length === 0) return;
+  const posted = postInteractions(url, input);
+  if (input.items.some((item) => item.kind === "review")) return yield* posted;
+  yield* posted.pipe(Effect.ignore());
+});
 
 const isIntensityError = Schema.is(AnnotationIntensityError);
 const decodeIntensityAnswer = Schema.decodeUnknownOption(
@@ -171,6 +206,7 @@ export const nextAnnotationReview = Effect.fn("nextAnnotationReview")(
         exclude: input.exclude,
         ...(input.more === undefined ? {} : { more: input.more }),
         ...(input.peek === undefined ? {} : { peek: input.peek }),
+        ...(input.release === undefined ? {} : { release: input.release }),
       }),
     );
     const response = yield* client.execute(request);

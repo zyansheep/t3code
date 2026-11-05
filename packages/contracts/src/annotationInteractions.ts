@@ -130,6 +130,19 @@ export const AnnotationInteractionsReportInput = Schema.Struct({
 });
 export type AnnotationInteractionsReportInput = typeof AnnotationInteractionsReportInput.Type;
 
+/**
+ * A report with review items the collector did not store: `retryable` when it could not be reached or failed, so the
+ * same items (same uids) can be sent again; not when it rejected one, which a resend would not change.
+ */
+export class AnnotationReportError extends Schema.TaggedError<AnnotationReportError>()(
+  "AnnotationReportError",
+  { detail: Schema.String, retryable: Schema.Boolean },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 /** One press of a chat shortcut that makes annotated words heavier (`1`) or lighter (`-1`) for a while. */
 export const AnnotationIntensityAdjustInput = Schema.Struct({
   step: Schema.Literals([1, -1]),
@@ -184,14 +197,16 @@ export class AnnotationIntensityError extends Schema.TaggedError<AnnotationInten
 
 /**
  * Asks the collector for the next card to review; `exclude` holds the ids of cards the client already has, `more`
- * (Review more, once the day is done) ignores today's new-card limit for this request, and `peek` asks for the counts
- * alone, with no card served or recorded.
+ * (Review more, once the day is done) ignores today's new-card limit for this request, `peek` asks for the counts
+ * alone, with no card served or recorded, and `release` names cards served to this client but never shown, so the
+ * collector can serve them again at once.
  */
 export const AnnotationReviewNextInput = Schema.Struct({
   source: Schema.Literals(["desktop", "mobile"]),
   exclude: Schema.Array(AnnotationId).check(Schema.isMaxLength(20)),
   more: Schema.optional(Schema.Boolean),
   peek: Schema.optional(Schema.Boolean),
+  release: Schema.optional(Schema.Array(AnnotationId).check(Schema.isMaxLength(20))),
 });
 export type AnnotationReviewNextInput = typeof AnnotationReviewNextInput.Type;
 
