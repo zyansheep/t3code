@@ -7,6 +7,7 @@ type HastNode = {
 };
 
 const SENTENCE_MARK = /^[。？！?!]+$/u;
+const LEADING_JAPANESE = /^[\p{scx=Han}\p{scx=Hira}\p{scx=Kana}]+/u;
 // The thresholds the contract allows; any other data-on renders its element as written.
 const THRESHOLD = /^(?:-2|-1|0|1|2|3)$/;
 // Other abbreviations, like CSP, are English already.
@@ -249,15 +250,26 @@ function renderAt(tree: HastNode, level: number, streaming: boolean) {
     if (node.tagName === "abbr" && arriving && (on === null || level >= on)) {
       return withChildren(node).children ?? [];
     }
-    // A word left open in a finished message renders as written.
-    if (node.tagName === "abbr" && on !== null && level < on && !leftOpen(node, streaming)) {
-      const english = node.properties?.dataEn;
-      const meaning = (typeof english === "string" && english) || glossMeaning(glossTitle(node));
-      if (meaning !== "") return [{ type: "text", value: meaning }];
-    }
+    if (node.tagName !== "abbr" || on === null) return [withChildren(node)];
+    const english = node.properties?.dataEn;
+    const meaning = (typeof english === "string" && english) || glossMeaning(glossTitle(node));
+    if (leftOpen(node, streaming)) return leftOpenWord(withChildren(node), meaning);
+    if (level < on && meaning !== "") return [{ type: "text", value: meaning }];
     return [withChildren(node)];
   }
   withChildren(tree);
+}
+
+/**
+ * A word left open in a finished message, which the HTML parser closed at its block's end, so it holds the rest of the
+ * block: it is its English at every level, standing for its own text (the Japanese it starts with), and the rest of
+ * the block renders as usual.
+ */
+function leftOpenWord(word: HastNode, meaning: string): HastNode[] {
+  const children = word.children ?? [];
+  const first = children[0];
+  if (first?.type === "text") first.value = (first.value ?? "").replace(LEADING_JAPANESE, "");
+  return [...(meaning === "" ? [] : [{ type: "text", value: meaning }]), ...children];
 }
 
 // An abbr or span tag at the end of a streaming reply, at any point before its `>`; a quoted attribute value may
