@@ -267,7 +267,11 @@ import { environmentThreadShells, threadEnvironment } from "../../state/threads"
 import { ThreadWorkflowOpening, useWorkflowOpening } from "./thread-workflow-opening";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
-import { englishOnlyAtom, showGlossedMessage } from "../../state/chat-japanese-view";
+import {
+  chatJapaneseLevelAtom,
+  englishOnlyAtom,
+  showGlossedMessage,
+} from "../../state/chat-japanese-view";
 import {
   fileRoutePathSegments,
   resolveFileLinkPath,
@@ -1184,9 +1188,14 @@ function ArtifactTemplateCard(props: {
 }
 
 // Loaded on the first tap: reporting is no reason for the feed to load the connection runtime.
-function reportGlossOpen(environmentId: EnvironmentId, messageText: string, word: string) {
+function reportGlossOpen(
+  environmentId: EnvironmentId,
+  messageText: string,
+  word: string,
+  level: number | undefined,
+) {
   void import("../../state/gloss-opens")
-    .then((reports) => reports.reportGlossOpen({ environmentId, messageText, word }))
+    .then((reports) => reports.reportGlossOpen({ environmentId, messageText, word, level }))
     .catch(() => undefined);
 }
 
@@ -1205,10 +1214,11 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   const threadIcons = useThreadChipIcons(props.environmentId, liveMarkdown);
   const { environmentId, glossMessageText } = props;
   const englishOnly = useAtomValue(englishOnlyAtom(environmentId));
-  // Words shown in English are not glosses to open.
-  const onGlossOpen = (word: string) => {
+  const japaneseLevel = useAtomValue(chatJapaneseLevelAtom(environmentId));
+  // Words shown in English are not glosses to open; a word below the level is no gloss at all.
+  const onGlossOpen = (word: string, level: number | undefined) => {
     if (glossMessageText !== undefined && !englishOnly) {
-      reportGlossOpen(environmentId, glossMessageText, word);
+      reportGlossOpen(environmentId, glossMessageText, word, level);
     }
   };
   const linkHandlers: MarkdownLinkHandlers = {
@@ -1230,6 +1240,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
         renderImage={props.renderImage}
         skills={props.skills}
         onGlossOpen={onGlossOpen}
+        japaneseLevel={japaneseLevel}
         englishOnly={englishOnly}
       />
     </>
@@ -1253,7 +1264,8 @@ function AssistantMarkdownBlocks(props: {
   readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
-  readonly onGlossOpen: (word: string) => void;
+  readonly onGlossOpen: (word: string, level: number | undefined) => void;
+  readonly japaneseLevel: number;
   readonly englishOnly: boolean;
 }) {
   const blocks = useMemo(
@@ -1298,6 +1310,7 @@ function AssistantMarkdownBlocks(props: {
           {...props.linkHandlers}
           renderImage={props.renderImage}
           onGlossOpen={props.onGlossOpen}
+          japaneseLevel={props.japaneseLevel}
           englishOnly={props.englishOnly}
         />
       );

@@ -47,7 +47,11 @@ export function glossOpenSession(nowMs: number, random: string): string {
   return `${nowMs.toString(36)}${random}`;
 }
 
-/** The report of one word tapped open, or null when the collector would not take the word (as the desktop skips it). */
+/**
+ * The report of one word tapped open, or null when the collector would not take the word (as the desktop skips it).
+ * It carries `level`, the chat level its message was rendered at (lib/markdownLevels.ts), when that is one the contract
+ * takes, -3 to 3: one item the server can't decode would fail its whole batch.
+ */
 // One view per word: a context keeps only its latest list, so a growing list would make later words look unopened
 // in an earlier episode. A tap counts whatever its length and may never be closed, so dwellMs stays 0.
 export function glossOpenItem(input: {
@@ -56,9 +60,13 @@ export function glossOpenItem(input: {
   readonly messageText: string;
   readonly word: string;
   readonly at: number;
+  readonly level?: number | undefined;
 }): AnnotationOpen | null {
   const word = input.word.trim();
   if (word.length === 0 || word.length > WORD_MAX_LENGTH) return null;
+  const { level } = input;
+  const rendered =
+    level !== undefined && Number.isInteger(level) && level >= -3 && level <= 3 ? { level } : {};
   return {
     kind: "pin",
     word,
@@ -69,6 +77,7 @@ export function glossOpenItem(input: {
     position: 0,
     box: [0, 0, 0, 0],
     annotations: [[word, 0, 0]],
+    ...rendered,
     uid: `phone-${input.session}-${input.sequence}`,
   };
 }
