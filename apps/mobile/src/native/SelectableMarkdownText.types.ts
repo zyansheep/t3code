@@ -77,9 +77,17 @@ export interface SelectableMarkdownTextProps {
   readonly models?: ReadonlyArray<SelectableMarkdownModel>;
   readonly preserveSoftBreaks?: boolean;
   readonly onLinkPress?: (href: string) => void;
-  /** A tap opened the gloss of this word (closing one is not reported). */
-  readonly onGlossOpen?: (word: string) => void;
-  /** Glossed Japanese shows as English (lib/markdownEnglishOnly.ts). */
+  /**
+   * A tap opened the gloss of this word (closing one is not reported), in markdown rendered at `level`, the
+   * `japaneseLevel` it had then.
+   */
+  readonly onGlossOpen?: (word: string, level: number | undefined) => void;
+  /**
+   * The chat level to render the weave's leveled Japanese at, -3 to 3 (lib/markdownLevels.ts); without it, leveled
+   * words and sentences show as written.
+   */
+  readonly japaneseLevel?: number;
+  /** Older messages' glossed Japanese shows as English (lib/markdownLevels.ts). */
   readonly englishOnly?: boolean;
   readonly fileContextMenu?: (href: string) => MarkdownFileContextMenu | undefined;
   readonly onFileContextMenuAction?: (href: string, actionId: string) => void;
