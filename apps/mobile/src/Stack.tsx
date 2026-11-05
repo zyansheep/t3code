@@ -69,6 +69,7 @@ import {
   ThreadRouteScreen,
 } from "./features/threads/ThreadRouteScreen";
 import { McpAppFullscreenScreen } from "./features/threads/McpAppFullscreenScreen";
+import { WordReviewScreen } from "./features/word-review/WordReviewScreen";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
 import { ConnectionsNewRouteScreen } from "./features/connection/ConnectionsNewRouteScreen";
 import { AddProjectDestinationRoute } from "./features/projects/AddProjectDestinationRoute";
@@ -709,6 +710,11 @@ const RootStackConfig = createWorkspaceStackNavigator({
       options: sheetRoute({ detent: 0.55, maxDetent: 0.7, androidFit: true }),
     }),
     ...SETTINGS_SCREENS,
+    // The environment is the one whose server has the collector, so the route is opened from the app, not a link.
+    WordReview: createNativeStackScreen({
+      screen: WordReviewScreen,
+      options: { ...DETAIL_HEADER_OPTIONS, title: "Review" },
+    }),
     SettingsLegal: createNativeStackScreen({
       screen: SettingsLegalRouteScreen,
       linking: "settings/legal",
