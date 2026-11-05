@@ -87,13 +87,15 @@ vi.mock(import("../state/use-atom-command"), async (original) => {
         : actual.useAtomCommand(command as never, options as never)) as never,
   };
 });
-// English only goes through the collector, which answers with what was asked for (with no end, so no timer).
-const { englishSet } = vi.hoisted(() => ({
+// English only and the level go through the collector, which answers with what was asked for (with no end, so no
+// timer).
+const { englishSet, collector } = vi.hoisted(() => ({
   englishSet: vi.fn((request: { input: { on: boolean } }) => ({
     on: request.input.on,
     until: 0,
     at: 0,
   })),
+  collector: { level: 0 },
 }));
 vi.mock(import("../state/annotationInteractions"), async (original) => ({
   ...(await original()),
@@ -101,6 +103,13 @@ vi.mock(import("../state/annotationInteractions"), async (original) => ({
     label: "test:english",
     run: async (_registry: unknown, request: { input: { on: boolean } }) =>
       AsyncResult.success(englishSet(request)),
+  } as never,
+  adjustAnnotationIntensity: {
+    label: "test:step",
+    run: async (_registry: unknown, request: { input: { step: 1 | -1 } }) => {
+      collector.level += request.input.step;
+      return AsyncResult.success({ level: collector.level, until: 0 });
+    },
   } as never,
 }));
 vi.mock(import("../state/annotationStatus"), async (original) => ({
@@ -164,6 +173,7 @@ import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { annotationStatusAtom } from "../state/annotationStatus";
 import { flush as flushReading, visibleReadingContexts } from "../lib/annotationReading";
 import { installChatRouteCommands } from "../shortcuts/chatRouteCommands";
+import { ThreadJapanesePanel } from "./chat/ThreadJapanesePanel";
 
 // Writable under the mock above.
 const setPrimaryEnvironment = (environmentId: EnvironmentId | null) =>
@@ -203,6 +213,7 @@ function setup() {
   flushReading();
   annotationReport.mockClear();
   englishSet.mockClear();
+  collector.level = 0;
   setPrimaryEnvironment(null);
   for (const environmentId of [ENGLISH_ENVIRONMENT, ENGLISH_PRIMARY]) {
     appAtomRegistry.set(annotationStatusAtom(environmentId), null);
@@ -881,5 +892,79 @@ describe("ChatMarkdown English only", () => {
       }),
     );
     await vi.waitFor(() => expect(blockTexts(screen.container)[1]).toBe("One 今."));
+  });
+});
+
+// A swapped word from heavier (1) up, and a sentence whose Japanese twin shows from much heavier (2) up; its English
+// twin has a word of its own from normal (0) up.
+const LEVELED =
+  'The <abbr title="もんだい · problem" data-en="problem" data-on="1">問題</abbr> is small. ' +
+  '<span data-jw="ja" data-on="2"><abbr title="あめ · rain">雨</abbr>です<abbr title="It is rain.">。</abbr></span>' +
+  '<span data-jw="en" data-on="2">It is <abbr title="あめ · rain" data-en="rain" data-on="0">雨</abbr>.</span>';
+
+describe("ChatMarkdown levels", () => {
+  it("renders a message at the reader's level, again from the panel's arrows, and reports what it shows at that level", async () => {
+    setup();
+    setEnglishOnly(ENGLISH_ENVIRONMENT, false);
+    await using screen = await render(
+      <AppAtomRegistryProvider>
+        <ThreadJapanesePanel environmentId={ENGLISH_ENVIRONMENT} />
+        <ChatMarkdown
+          cwd="/tmp/project"
+          text={LEVELED}
+          threadRef={{ environmentId: ENGLISH_ENVIRONMENT, threadId: ThreadId.make("thread-en") }}
+        />
+      </AppAtomRegistryProvider>,
+    );
+    const paragraph = screen.container.querySelector("p")!;
+    const reported = (kind: string) =>
+      annotationReport.mock.calls
+        .flatMap(
+          ([report]) => (report as { input: { items: Array<{ kind: string }> } }).input.items,
+        )
+        .filter((item) => item.kind === kind);
+    const glossed = (...words: string[]) =>
+      words.map((word) => [word, expect.any(Number), expect.any(Number)]);
+    const pin = async (word: Element, gloss: string) => {
+      await userEvent.click(word);
+      await expect.element(page.getByText(gloss)).toBeVisible();
+      await userEvent.click(word);
+      await vi.waitFor(() => expect(reported("pin")).toHaveLength(1));
+      const [opened] = reported("pin");
+      annotationReport.mockClear();
+      return opened;
+    };
+    expect(paragraph.textContent).toBe("The problem is small. It is 雨.");
+    expect(await pin(paragraph.querySelector("abbr")!, "あめ · rain")).toMatchObject({
+      word: "雨",
+      position: 0,
+      level: 0,
+      annotations: glossed("雨"),
+    });
+
+    const heavier = page.getByRole("button", { name: "Heavier" });
+    await userEvent.click(heavier);
+    await vi.waitFor(() => expect(paragraph.textContent).toBe("The 問題 is small. It is 雨."));
+    await userEvent.click(heavier);
+    await expect.element(page.getByText("much heavier")).toBeVisible();
+    await vi.waitFor(() => expect(paragraph.textContent).toBe("The 問題 is small. 雨です。"));
+    // The same paragraph, rendered again in place.
+    expect(screen.container.querySelector("p")).toBe(paragraph);
+    expect(await pin(paragraph.querySelector("abbr")!, "もんだい · problem")).toMatchObject({
+      word: "問題",
+      position: 0,
+      level: 2,
+      annotations: glossed("問題", "雨", "。"),
+    });
+    paragraph.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+    flushReading();
+    expect(reported("click")).toEqual([
+      expect.objectContaining({ level: 2, annotations: glossed("問題", "雨", "。") }),
+    ]);
+
+    // English only renders as no Japanese at all.
+    await act(() => setEnglishOnly(ENGLISH_ENVIRONMENT, true));
+    await vi.waitFor(() => expect(paragraph.textContent).toBe("The problem is small. It is rain."));
+    expect(paragraph.querySelector("abbr")).toBeNull();
   });
 });
