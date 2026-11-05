@@ -1,4 +1,8 @@
-import { createEnvironmentRpcCommand, runAtomCommand } from "@t3tools/client-runtime/state/runtime";
+import {
+  createEnvironmentRpcCommand,
+  runAtomCommand,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { AnnotationInteraction, type EnvironmentId, WS_METHODS } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
@@ -9,10 +13,12 @@ import { subscribeAppActive } from "../lib/appState";
 import { writeFileAtomically } from "../lib/atomic-file";
 import {
   createGlossOpenQueue,
+  failedReportResult,
   glossContextId,
   glossContextsOf,
   glossOpenItem,
   glossOpenSession,
+  type GlossOpenSendResult,
   type QueuedGlossOpen,
 } from "../lib/glossOpens";
 import { appAtomRegistry } from "./atom-registry";
@@ -32,8 +38,14 @@ async function queueFile() {
   return new File(Paths.document, QUEUE_FILE);
 }
 
-/** False on a failure or a server that is too slow; a late arrival is stored once, by its uid. */
-async function send(environmentId: string, items: ReadonlyArray<AnnotationInteraction>) {
+/**
+ * False on a failure to try again or a server that is too slow (a late arrival is stored once, by its uid); the items
+ * the server refused for good when it stored the rest.
+ */
+async function send(
+  environmentId: string,
+  items: ReadonlyArray<AnnotationInteraction>,
+): Promise<GlossOpenSendResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<false>((resolve) => {
     timer = setTimeout(() => resolve(false), SEND_TIMEOUT_MS);
@@ -43,7 +55,9 @@ async function send(environmentId: string, items: ReadonlyArray<AnnotationIntera
     reportOpens,
     { environmentId: environmentId as EnvironmentId, input: { items: [...items] } },
     { reportFailure: false, reportDefect: false },
-  ).then(AsyncResult.isSuccess);
+  ).then((result) =>
+    AsyncResult.isSuccess(result) ? true : failedReportResult(squashAtomCommandFailure(result)),
+  );
   try {
     return await Promise.race([sent, late]);
   } finally {
