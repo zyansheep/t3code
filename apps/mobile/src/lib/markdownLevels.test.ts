@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { markdownWithHtml, parseMarkdownSource, type MarkdownNode } from "./markdownDocument";
-import { ENGLISH_ONLY_LEVEL, markdownAtLevel, markdownEnglishOnly } from "./markdownLevels";
+import {
+  ENGLISH_ONLY_LEVEL,
+  hasLevelMarkup,
+  markdownAtLevel,
+  markdownEnglishOnly,
+} from "./markdownLevels";
 import { glossHref } from "./markdownGlosses";
 
 const english = (html: string) => markdownEnglishOnly(markdownWithHtml(html));
@@ -72,7 +77,8 @@ const LEVELS = [-3, -2, -1, 0, 1, 2, 3];
 const gloss = (word: string, title: string) => `[${word}](<${glossHref(title)}>)`;
 
 /** A message at a level as the phone renders it: the level, then the gloss links. */
-const at = (markdown: string, level: number) => markdownWithHtml(markdownAtLevel(markdown, level));
+const at = (markdown: string, level: number, streaming = false) =>
+  markdownWithHtml(markdownAtLevel(markdown, level, streaming));
 
 /** English only: -3, then older glosses as English. */
 const englishOnly = (markdown: string) =>
@@ -131,14 +137,14 @@ describe("markdownAtLevel", () => {
     expect(at(inner, -2)).toBe("In inside.");
   });
 
-  it("shows nothing Japanese at -3, whatever an element's threshold", () => {
+  it("shows nothing Japanese at -3, the lowest threshold included", () => {
     const lowest =
-      'Now <abbr title="いま · now" data-en="now" data-on="-2">今</abbr> and <abbr title="いま · now" data-en="right now" data-on="-3">今</abbr>. ' +
+      'Now <abbr title="いま · now" data-en="right now" data-on="-2">今</abbr>. ' +
       '<span data-jw="ja" data-on="-2"><abbr title="あめ · rain">雨</abbr><abbr title="Rain.">。</abbr></span><span data-jw="en" data-on="-2">Rain.</span>';
     expect(at(lowest, -2)).toBe(
-      `Now ${gloss("今", "いま · now")} and ${gloss("今", "いま · now")}. ${gloss("雨", "あめ · rain")}${gloss("。", "Rain.")}`,
+      `Now ${gloss("今", "いま · now")}. ${gloss("雨", "あめ · rain")}${gloss("。", "Rain.")}`,
     );
-    expect(at(lowest, -3)).toBe("Now now and right now. Rain.");
+    expect(at(lowest, -3)).toBe("Now right now. Rain.");
     expect(at(LEVELED, -3)).toBe("The problem is small. It is raining today. We stay in.");
   });
 
@@ -151,6 +157,24 @@ describe("markdownAtLevel", () => {
     const unleveled =
       '<span data-jw="ja"><abbr title="あめ · rain" data-on="high">雨</abbr></span><span data-jw="en">Rain</span>';
     expect(markdownAtLevel(unleveled, -3)).toBe(unleveled);
+    expect(hasLevelMarkup(MIXED)).toBe(false);
+    expect(hasLevelMarkup(LEVELED)).toBe(true);
+  });
+
+  it("takes only the contract's thresholds, written exactly, and leaves any other element as written", () => {
+    for (const on of ["-3", "4", " 1", "1 ", "+1", "01", "1.0", "", "-0"]) {
+      const word = `A <abbr title="あめ · rain" data-en="rain" data-on="${on}">雨</abbr>.`;
+      const twins = `<span data-jw="ja" data-on="${on}">雨</span><span data-jw="en" data-on="${on}">Rain</span>`;
+      for (const level of [-3, 3]) {
+        expect(markdownAtLevel(word, level)).toBe(word);
+        expect(markdownAtLevel(twins, level)).toBe(twins);
+      }
+    }
+    for (const on of ["-2", "-1", "0", "1", "2", "3"]) {
+      expect(at(`<abbr title="あめ · rain" data-en="rain" data-on="${on}">雨</abbr>`, -3)).toBe(
+        "rain",
+      );
+    }
   });
 
   it("turns older glosses into English under English only, in older and leveled messages alike", () => {
@@ -212,10 +236,41 @@ describe("markdownAtLevel", () => {
 
   it("hides a twin still streaming in by its threshold", () => {
     const streaming = 'Hi. <span data-jw="ja" data-on="2"><abbr title="あめ · rain">雨</abbr>で';
-    expect(at(streaming, 1)).toBe("Hi. ");
-    expect(at(streaming, 2)).toBe(`Hi. ${gloss("雨", "あめ · rain")}で`);
+    expect(at(streaming, 1, true)).toBe("Hi. ");
+    expect(at(streaming, 2, true)).toBe(`Hi. ${gloss("雨", "あめ · rain")}で`);
     const english = `${streaming}<abbr title="Rain.">。</abbr></span><span data-jw="en" data-on="2">It is ra`;
-    expect(at(english, 1)).toBe("Hi. It is ra");
-    expect(at(english, 2)).toBe(`Hi. ${gloss("雨", "あめ · rain")}で${gloss("。", "Rain.")}`);
+    expect(at(english, 1, true)).toBe("Hi. It is ra");
+    expect(at(english, 2, true)).toBe(`Hi. ${gloss("雨", "あめ · rain")}で${gloss("。", "Rain.")}`);
+    // Only at the end of what has come: a twin left open in an earlier paragraph is broken, not streaming.
+    expect(at(`${streaming}\n\nMore`, 1, true)).toBe(`Hi. ${gloss("雨", "あめ · rain")}で\n\nMore`);
+  });
+
+  it("fails safe on broken twins: English below the threshold, and never cuts the text after them", () => {
+    const rain = gloss("雨", "あめ · rain");
+    // A blank line inside a twin keeps it one twin.
+    const blankJapanese =
+      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>。\n\n<abbr title="あめ · rain">雨</abbr>。</span><span data-jw="en" data-on="1">Rain. Rain.</span> After.';
+    expect(at(blankJapanese, 0)).toBe("Rain. Rain. After.");
+    expect(at(blankJapanese, 1)).toBe(`${rain}。\n\n${rain}。 After.`);
+    const blankEnglish =
+      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>。</span><span data-jw="en" data-on="1">Rain.\n\nRain.</span> After.';
+    expect(at(blankEnglish, 0)).toBe("Rain.\n\nRain. After.");
+    expect(at(blankEnglish, 1)).toBe(`${rain}。 After.`);
+
+    // A Japanese twin left open ends where its English twin starts.
+    const openJapanese =
+      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>。<span data-jw="en" data-on="1">Rain.</span> After.\n\nNext.';
+    expect(at(openJapanese, 0)).toBe("Rain. After.\n\nNext.");
+    expect(at(openJapanese, 1)).toBe(`${rain}。 After.\n\nNext.`);
+    // An English twin left open shows at every level, and its Japanese twin goes.
+    const openEnglish =
+      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>。</span><span data-jw="en" data-on="1">Rain. After.\n\nNext.';
+    for (const level of LEVELS) expect(at(openEnglish, level)).toBe("Rain. After.\n\nNext.");
+    // A Japanese twin left open with no English stays as written rather than cut what follows.
+    const alone = 'Hi. <span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>。 After.';
+    expect(at(alone, 0)).toBe(`Hi. ${rain}。 After.`);
+    // A word left open stays as written too.
+    const word = 'A <abbr title="あめ · rain" data-en="rain" data-on="1">雨 after.';
+    expect(at(word, 0)).toBe("A 雨 after.");
   });
 });
