@@ -6,10 +6,7 @@ import {
   glossOf,
   glossWord,
   hasGlossLinks,
-  isGlossHref,
-  isReviewHref,
   markdownWithGlosses,
-  REVIEW_WEDGE,
 } from "./markdownGlosses";
 import { ENRICHED_INLINE_FILE_LINK_REGEX } from "./enrichedLinkPresentation";
 
@@ -93,32 +90,6 @@ describe("glossed words in native Markdown", () => {
     const url = (paragraph as { children: Array<{ attributes?: { url?: string } }> }).children[0]!
       .attributes!.url!;
     expect(glossOf(url)).toEqual({ index: 0, title: "もんだい · problem" });
-  });
-
-  it("ends an opened gloss in the review wedge when asked, leaving the numbering alone", async () => {
-    const markdown = markdownWithHtml(`${PROBLEM}は${PROBLEM}`);
-    expect(markdownWithGlosses(markdown, new Set([0]))).not.toContain("t3-review:");
-    const opened = markdownWithGlosses(markdown, new Set([1]), { reviewWedge: true });
-    expect(glossWord(markdown, 1)).toBe("問題");
-    const paragraph = (await parseMarkdown(opened))?.children?.[0];
-    expect(paragraph).toMatchObject({
-      type: "Paragraph",
-      children: [
-        { type: "Link", children: [{ type: "Text", content: "問題" }] },
-        { type: "Text", content: "は" },
-        { type: "Link", children: [{ type: "Text", content: "問題" }] },
-        { type: "Text", content: " (" },
-        { type: "Emphasis", children: [{ type: "Text", content: "もんだい · problem" }] },
-        { type: "Text", content: " " },
-        { type: "Link", children: [{ type: "Text", content: REVIEW_WEDGE }] },
-        { type: "Text", content: ")" },
-      ],
-    });
-    const children = (paragraph as { children: Array<{ attributes?: { url?: string } }> }).children;
-    const wedge = children[6]!.attributes!.url!;
-    expect(isReviewHref(wedge)).toBe(true);
-    expect(isGlossHref(wedge)).toBe(false);
-    expect(glossOf(children[2]!.attributes!.url!)?.index).toBe(1);
   });
 
   it("leaves Markdown with no glosses alone", () => {

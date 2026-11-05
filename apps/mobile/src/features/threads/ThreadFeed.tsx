@@ -315,7 +315,6 @@ import {
 import { ThreadWorkflowOpening, useWorkflowOpening } from "./thread-workflow-opening";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
-import { openFlashcards } from "../../state/flashcards-open";
 import {
   fileRoutePathSegments,
   isAbsolutePath,
@@ -1364,7 +1363,6 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
       reportGlossOpen(environmentId, glossMessageText, word);
     }
   };
-  const onReviewOpen = () => openFlashcards(environmentId);
   const linkHandlers: MarkdownLinkHandlers = {
     ...props.linkHandlers,
     ...(onImagePress ? { onImagePress: (href: string) => onImagePress(href, withGallery) } : {}),
@@ -1412,7 +1410,6 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
         skills={props.skills}
         models={models}
         onGlossOpen={onGlossOpen}
-        onReviewOpen={onReviewOpen}
       />
       {quoteChoices.length > 0 && props.onCiteAssistantText ? (
         <Sheet title={gt("Choose quote source")} onClose={() => setQuoteSelection(null)}>
@@ -1456,7 +1453,6 @@ function AssistantMarkdownBlocks(props: {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
   readonly models: ReturnType<typeof useModelMentions>;
   readonly onGlossOpen: (word: string) => void;
-  readonly onReviewOpen: () => void;
 }) {
   const m = useMessages();
   const { blocks, definitions } = useMemo(() => {
@@ -1523,7 +1519,6 @@ function AssistantMarkdownBlocks(props: {
           {...props.linkHandlers}
           renderImage={props.renderImage}
           onGlossOpen={props.onGlossOpen}
-          onReviewOpen={props.onReviewOpen}
         />
       );
     });
