@@ -19,7 +19,7 @@ import {
   isGlossHref,
   markdownWithGlosses,
 } from "../lib/markdownGlosses";
-import { markdownEnglishOnly } from "../lib/markdownEnglishOnly";
+import { markdownAtLevel, markdownEnglishOnly } from "../lib/markdownLevels";
 import { isValidElement, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { Platform, Share, StyleSheet, useWindowDimensions, View } from "react-native";
 import {
@@ -204,29 +204,38 @@ function codeBlockElement(
   return undefined;
 }
 
+const NO_GLOSSES: ReadonlySet<number> = new Set();
+
 export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   const { renderImage, resolveImageSource, fileEmbedLabel } = props;
   const { themeAppearance, mathRenderingEnabled } = useAppearancePreferences();
-  const { englishOnly } = props;
+  const { englishOnly, japaneseLevel } = props;
   const { markdown, fileHrefs } = useMemo(() => {
+    // The level picks from the message as written, whose attributes markdownWithHtml drops.
+    const source =
+      japaneseLevel === undefined ? props.markdown : markdownAtLevel(props.markdown, japaneseLevel);
     const shown = englishOnly ? markdownEnglishOnly : (content: string) => content;
     if (!fileEmbedLabel) {
       return {
-        markdown: shown(
-          markdownForNativeRendering(props.markdown, ENRICHED_INLINE_FILE_LINK_REGEX),
-        ),
+        markdown: shown(markdownForNativeRendering(source, ENRICHED_INLINE_FILE_LINK_REGEX)),
         fileHrefs: new Set<string>(),
       };
     }
     const content = markdownWithInlineFileLinks(
-      markdownForNativeParsing(props.markdown),
+      markdownForNativeParsing(source),
       ENRICHED_INLINE_FILE_LINK_REGEX,
     );
     const files = markdownWithFileEmbeds(content, fileEmbedLabel);
     return { ...files, markdown: shown(markdownWithTableBreaks(files.markdown)) };
-  }, [props.markdown, fileEmbedLabel, englishOnly]);
-  // Glossed words a tap has opened, by occurrence: each shows its gloss until tapped again.
-  const [openGlosses, setOpenGlosses] = useState<ReadonlySet<number>>(() => new Set());
+  }, [props.markdown, fileEmbedLabel, englishOnly, japaneseLevel]);
+  // Glossed words a tap has opened, by occurrence: each shows its gloss until tapped again. Occurrences are numbered
+  // anew at another level or English only, so those start with none open; streaming in keeps them.
+  const glossView = `${japaneseLevel ?? ""}/${englishOnly ? "en" : ""}`;
+  const [openedGlosses, setOpenedGlosses] = useState<{
+    readonly view: string;
+    readonly open: ReadonlySet<number>;
+  }>(() => ({ view: glossView, open: new Set() }));
+  const openGlosses = openedGlosses.view === glossView ? openedGlosses.open : NO_GLOSSES;
   const glossed = hasGlossLinks(markdown);
   const rendered = useMemo(
     () => markdownWithGlosses(markdown, openGlosses),
@@ -238,14 +247,14 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     if (!gloss) return;
     // Decided here, not in the updater: an updater may run twice, and a tap is one report.
     const opening = !openGlosses.has(gloss.index);
-    setOpenGlosses((previous) => {
-      const next = new Set(previous);
+    setOpenedGlosses((previous) => {
+      const next = new Set(previous.view === glossView ? previous.open : NO_GLOSSES);
       if (!next.delete(gloss.index)) next.add(gloss.index);
-      return next;
+      return { view: glossView, open: next };
     });
     if (!opening || !onGlossOpen) return;
     const word = glossWord(markdown, gloss.index);
-    if (word) onGlossOpen(word);
+    if (word) onGlossOpen(word, japaneseLevel);
   };
   const [parsedLinkUrls, setParsedLinkUrls] = useState<ReadonlyArray<string>>([]);
   const onLinksChange = (links: MarkdownLinkOccurrence[]) => {
