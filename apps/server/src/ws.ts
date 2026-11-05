@@ -109,7 +109,11 @@ import {
 } from "effect/http";
 import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 
-import { forwardAnnotationInteractions, noAnnotationReview } from "./annotationInteractions.ts";
+import {
+  forwardAnnotationInteractions,
+  noAnnotationControls,
+  noAnnotationReview,
+} from "./annotationInteractions.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as ServerConfig from "./config.ts";
@@ -2543,7 +2547,10 @@ export const layerWsRpc = (
           serverSelfUpdate.commitDesktopUpdate(input.requestId),
         [WS_METHODS.serverReportAnnotationInteractions]: (input) =>
           forwardAnnotationInteractions(input).pipe(Effect.provide(FetchHttpClient.layer)),
+        [WS_METHODS.serverAdjustAnnotationIntensity]: (_input) => noAnnotationControls,
         [WS_METHODS.serverNextAnnotationReview]: (_input) => noAnnotationReview,
+        [WS_METHODS.serverGetAnnotationStatus]: (_input) => noAnnotationControls,
+        [WS_METHODS.serverSetAnnotationEnglish]: (_input) => noAnnotationControls,
         [WS_METHODS.serverUpsertKeybinding]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (rule) {

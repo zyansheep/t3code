@@ -6,10 +6,16 @@ import {
   OrchestrationV2SearchThreadsResult,
 } from "./orchestrationV2.ts";
 import {
+  AnnotationEnglish,
+  AnnotationEnglishSetInput,
+  AnnotationIntensity,
+  AnnotationIntensityAdjustInput,
+  AnnotationIntensityError,
   AnnotationInteractionsReportInput,
   AnnotationReviewError,
   AnnotationReviewNextInput,
   AnnotationReviewNextResult,
+  AnnotationStatus,
 } from "./annotationInteractions.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
@@ -510,7 +516,10 @@ export const WS_METHODS = {
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
   serverCommitDesktopUpdate: "server.commitDesktopUpdate",
   serverReportAnnotationInteractions: "server.reportAnnotationInteractions",
+  serverAdjustAnnotationIntensity: "server.adjustAnnotationIntensity",
   serverNextAnnotationReview: "server.nextAnnotationReview",
+  serverGetAnnotationStatus: "server.getAnnotationStatus",
+  serverSetAnnotationEnglish: "server.setAnnotationEnglish",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
   serverRunStorageCleanup: "server.runStorageCleanup",
@@ -629,10 +638,28 @@ const WsServerReportAnnotationInteractionsRpc = Rpc.make(
   },
 );
 
+const WsServerAdjustAnnotationIntensityRpc = Rpc.make(WS_METHODS.serverAdjustAnnotationIntensity, {
+  payload: AnnotationIntensityAdjustInput,
+  success: AnnotationIntensity,
+  error: Schema.Union([AnnotationIntensityError, EnvironmentAuthorizationError]),
+});
+
 const WsServerNextAnnotationReviewRpc = Rpc.make(WS_METHODS.serverNextAnnotationReview, {
   payload: AnnotationReviewNextInput,
   success: AnnotationReviewNextResult,
   error: Schema.Union([AnnotationReviewError, EnvironmentAuthorizationError]),
+});
+
+const WsServerGetAnnotationStatusRpc = Rpc.make(WS_METHODS.serverGetAnnotationStatus, {
+  payload: Schema.Struct({}),
+  success: AnnotationStatus,
+  error: Schema.Union([AnnotationIntensityError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSetAnnotationEnglishRpc = Rpc.make(WS_METHODS.serverSetAnnotationEnglish, {
+  payload: AnnotationEnglishSetInput,
+  success: AnnotationEnglish,
+  error: Schema.Union([AnnotationIntensityError, EnvironmentAuthorizationError]),
 });
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -2026,7 +2053,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpdateServerWithProgressRpc,
   WsServerCommitDesktopUpdateRpc,
   WsServerReportAnnotationInteractionsRpc,
+  WsServerAdjustAnnotationIntensityRpc,
   WsServerNextAnnotationReviewRpc,
+  WsServerGetAnnotationStatusRpc,
+  WsServerSetAnnotationEnglishRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
   WsServerRunStorageCleanupRpc,

@@ -1,4 +1,8 @@
-import { type AnnotationInteractionsReportInput, AnnotationReviewError } from "@t3tools/contracts";
+import {
+  AnnotationIntensityError,
+  type AnnotationInteractionsReportInput,
+  AnnotationReviewError,
+} from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
@@ -33,4 +37,12 @@ export const forwardAnnotationInteractions = Effect.fn("forwardAnnotationInterac
  */
 export const noAnnotationReview = Effect.fail(
   new AnnotationReviewError({ detail: "This server has no review cards" }),
+);
+
+/**
+ * Chat Japanese status, level and English only come from the Z3 Code desktop server's collector too. "not configured" is
+ * the answer a desktop server without a collector gives, which clients read as no Japanese controls.
+ */
+export const noAnnotationControls = Effect.fail(
+  new AnnotationIntensityError({ detail: "not configured" }),
 );
