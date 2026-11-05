@@ -11,6 +11,10 @@ export interface AppBarAction {
   readonly loading?: boolean;
   readonly selected?: boolean;
   readonly tintColor?: ColorValue;
+  /** Android: shown under the action's title in the overflow menu. */
+  readonly subtitle?: string;
+  /** Android: only ever in the overflow menu. */
+  readonly overflowOnly?: boolean;
 }
 
 export type AppBarMenuItem =

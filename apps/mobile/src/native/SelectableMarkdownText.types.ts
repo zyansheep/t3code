@@ -70,6 +70,8 @@ export interface SelectableMarkdownTextProps {
   readonly onLinkPress?: (href: string) => void;
   /** A tap opened the gloss of this word (closing one is not reported). */
   readonly onGlossOpen?: (word: string) => void;
+  /** Glossed Japanese shows as English (lib/markdownEnglishOnly.ts). */
+  readonly englishOnly?: boolean;
   readonly fileContextMenu?: (href: string) => MarkdownFileContextMenu | undefined;
   readonly onFileContextMenuAction?: (href: string, actionId: string) => void;
   readonly linkCustomization?: (href: string) => MarkdownLinkCustomization | undefined;

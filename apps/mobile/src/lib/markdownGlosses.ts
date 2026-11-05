@@ -17,6 +17,17 @@ export function isGlossHref(url: string): boolean {
   return url.startsWith(GLOSS_SCHEME);
 }
 
+/** The title of a gloss link as markdownWithHtml writes it (not yet numbered), or null for another link. */
+export function glossHrefTitle(url: string): string | null {
+  if (!isGlossHref(url)) return null;
+  const encoded = url.slice(GLOSS_SCHEME.length);
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return encoded;
+  }
+}
+
 /** The occurrence a numbered gloss link points to, and its title. */
 export function glossOf(url: string): { readonly index: number; readonly title: string } | null {
   const match = /^t3-gloss:(\d+)\/(.*)$/s.exec(url);
@@ -30,7 +41,7 @@ export function glossOf(url: string): { readonly index: number; readonly title: 
   return { index: Number(match[1]), title };
 }
 
-function escapeMarkdown(text: string): string {
+export function escapeMarkdown(text: string): string {
   return text.replace(/[\\`*_[\]<>~|$&]/g, "\\$&");
 }
 
