@@ -125,6 +125,56 @@ describe("forwardAnnotationInteractions", () => {
     }),
   );
 
+  it.effect(
+    "fails a batch with review items the collector does not store, saying if a resend can help",
+    () =>
+      Effect.gen(function* () {
+        const graded = decodeReport({
+          items: [
+            {
+              kind: "review",
+              at: 1_800_000_000_000,
+              card: "c42",
+              word: "問題",
+              revealMs: 1_200,
+              shownMs: 3_000,
+              grade: 3,
+              gradeMs: 3_000,
+              source: "desktop",
+              uid: "review-2",
+            },
+          ],
+        });
+        const failure = (answer: { readonly status: number; readonly body: unknown } | null) =>
+          Effect.flip(collectorWith(forwardAnnotationInteractions(graded), configured, answer).run);
+        const down = yield* failure(null);
+        assert.deepStrictEqual(
+          [down._tag, down.detail, down.retryable],
+          ["AnnotationReportError", "collector unreachable", true],
+        );
+        const broken = yield* failure({ status: 500, body: { ok: false } });
+        assert.deepStrictEqual([broken.detail, broken.retryable], ["collector answered 500", true]);
+        const rejected = yield* failure({
+          status: 200,
+          body: { ok: true, stored: 0, duplicates: 0, rejected: 1 },
+        });
+        assert.deepStrictEqual(
+          [rejected.detail, rejected.retryable],
+          ["collector rejected 1 of 1", false],
+        );
+        // A resend the collector already has is a duplicate, which is stored.
+        const resent = collectorWith(forwardAnnotationInteractions(graded), configured, {
+          status: 200,
+          body: { ok: true, stored: 0, duplicates: 1, rejected: 0 },
+        });
+        yield* resent.run;
+        assert.strictEqual(resent.requests.length, 1);
+        // Reading reports stay best effort.
+        yield* collectorWith(forwardAnnotationInteractions({ items: [peek] }), configured, null)
+          .run;
+      }),
+  );
+
   it.effect("sends nothing without a collector and never fails on a bad answer", () =>
     Effect.gen(function* () {
       const off = forwardWith({});
@@ -324,19 +374,20 @@ describe("nextAnnotationReview", () => {
     }),
   );
 
-  it.effect("passes a counts-only peek on, for a badge", () =>
+  it.effect("passes a counts-only peek and the cards to release on, for a badge", () =>
     Effect.gen(function* () {
       const counts = { new: 12, learning: 3, review: 40 };
       const { requests, run } = reviewWith(
         configured,
         { status: 200, body: { ok: true, card: null, counts } },
-        { source: "desktop", exclude: [], peek: true },
+        { source: "desktop", exclude: [], peek: true, release: ["c7"] },
       );
       assert.deepStrictEqual(yield* run, { card: null, counts });
       assert.deepStrictEqual(JSON.parse(requests[0]!.body), {
         source: "desktop",
         exclude: [],
         peek: true,
+        release: ["c7"],
       });
     }),
   );
