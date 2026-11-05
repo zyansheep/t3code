@@ -1,11 +1,14 @@
 import type { InlineSkill } from "@t3tools/shared/inlineSkills";
 import type { OrchestrationV2SearchThreadResult, ScopedThreadRef } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { orchestrationEnvironment } from "~/state/orchestration";
 import { useThreadProjection } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useDebouncedValue } from "~/state/queries";
+import { chatLevelAtom, englishOnlyAtom } from "~/state/annotationStatus";
+import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { type ThreadFindMatch, type ThreadFindStart, stepThreadFindIndex } from "./threadFind";
 import {
   CLOSED_THREAD_FIND,
@@ -279,6 +282,12 @@ function useServerResults(
   const debouncedQuery = useDebouncedValue(normalizedQuery, 100);
   const environmentId = thread?.environmentId;
   const threadId = thread?.threadId;
+  // Replies render at the chat level of this client's own server, as ChatMarkdown does; find counts what they show.
+  const levelEnvironmentId = useAtomValue(primaryEnvironmentIdAtom) ?? environmentId ?? null;
+  const chatLevel = {
+    level: useAtomValue(chatLevelAtom(levelEnvironmentId)),
+    englishOnly: useAtomValue(englishOnlyAtom(levelEnvironmentId)),
+  };
   const target =
     environmentId && threadId && debouncedQuery && normalizedQuery === debouncedQuery
       ? {
@@ -289,6 +298,7 @@ function useServerResults(
             ...(start ? { start } : {}),
             ...(offset !== 0 ? { offset } : {}),
             skills: skillLabels,
+            chatLevel,
           },
         }
       : null;
