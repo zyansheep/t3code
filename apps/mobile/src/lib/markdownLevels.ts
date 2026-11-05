@@ -160,8 +160,10 @@ const LEVEL_MARKUP = /\sdata-on=/i;
 // What may stand between a Japanese twin and its English one: whitespace within a block.
 const BETWEEN_TWINS = /^\s*$/;
 const BLANK_LINE = /\n[ \t]*\r?\n/;
-// The start of an `<abbr>` or `<span>` tag at the end of a message still streaming in.
-const PARTIAL_TAG = /<\/?(?:(?:abbr|span)(?:\s[^<>]*)?|a(?:bb?)?|s(?:pa?)?)?$/i;
+// An `<abbr>` or `<span>` tag at the end of a message still streaming in, at any point before its `>`; a quoted
+// attribute value may hold a `>`.
+const PARTIAL_TAG =
+  /<\/?(?:(?:abbr|span)(?:\s(?:[^<>"']|"[^"]*"|'[^']*')*(?:"[^"]*|'[^']*')?)?|a(?:bb?)?|s(?:pa?)?)?$/i;
 
 interface HtmlTag {
   readonly start: number;
@@ -179,6 +181,14 @@ interface Element {
   end: number;
   /** Left open in a finished message, or crossing a block: markup the weave did not write. */
   broken: boolean;
+}
+
+/**
+ * A message still streaming in, without an `<abbr>` or `<span>` tag at its end that has not finished arriving, which
+ * would show as text, attributes and all, until its `>` came.
+ */
+export function withoutPartialTag(markdown: string): string {
+  return markdown.replace(PARTIAL_TAG, "");
 }
 
 /** Whether a message has the weave's level markup, so it renders, and its reports go, by level. */
@@ -279,9 +289,8 @@ function lastTranslation(markdown: string, twin: Element, abbrs: ReadonlyArray<E
  * their Japanese at levels N and up and their English below; anything without a threshold stays as written.
  */
 export function markdownAtLevel(source: string, level: number, streaming = false): string {
-  if (!hasLevelMarkup(source)) return source;
-  // A tag still coming in shows as text, attributes and all, until it closes.
-  const markdown = streaming ? source.replace(PARTIAL_TAG, "") : source;
+  const markdown = streaming ? withoutPartialTag(source) : source;
+  if (!hasLevelMarkup(markdown)) return markdown;
   const tags: HtmlTag[] = [];
   collectTags(markdown, parseMarkdownSource(markdown), tags);
   const elements = pairElements(tags, markdown.trimEnd().length, streaming);
