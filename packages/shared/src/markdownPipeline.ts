@@ -179,7 +179,7 @@ function rehypePreserveAbbreviationTitles() {
 
 const IMAGE_SRC_PROTOCOLS = [...(defaultSchema.protocols?.src ?? []), "file", "t3-context"];
 // The lowest chat level (data-on) at which a glossed word or a sentence's Japanese twin (data-jw) shows.
-const LEVEL_THRESHOLD = /^-?\d$/;
+const LEVEL_THRESHOLD = /^(?:-2|-1|0|1|2|3)$/;
 
 const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   ...defaultSchema,
