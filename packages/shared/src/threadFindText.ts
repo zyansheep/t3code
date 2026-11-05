@@ -132,7 +132,7 @@ function markdownThreadFindText(
       : insightProcessor
     : processor;
   const tree = renderer.runSync(renderer.parse(markdown), markdown);
-  if (level) rehypeChatLevel(level)(tree, { value: markdown });
+  if (level) rehypeChatLevel(level)(tree);
   const paths = [
     ...extractMarkdownLinkHrefs(renderCodexInlineDirectivesAsMarkdown(markdown)).map(
       decodeMarkdownLinkEscapes,
