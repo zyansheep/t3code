@@ -74,7 +74,10 @@ export interface ReviewSessionDeps {
     readonly exclude: ReadonlyArray<string>;
     readonly more: boolean;
   }) => Promise<ReviewFetched>;
-  readonly report: (item: ReviewItem) => Promise<unknown>;
+  /** `failed`: it may not have arrived, and is sent again under the same uid. */
+  readonly report: (item: ReviewItem) => Promise<"stored" | "rejected" | "failed">;
+  /** Cards the collector served that were never shown, to hand back. */
+  readonly release: (ids: ReadonlyArray<string>) => void;
   readonly onChange: (state: ReviewState) => void;
   readonly uid: () => string;
   /** Epoch ms, for when a card was shown. */
@@ -84,11 +87,17 @@ export interface ReviewSessionDeps {
 }
 
 const WAITING_RETRY_MS = 30_000;
+const MAX_EXCLUDE = 20;
+// The collector refuses longer times; a card left on screen overnight counts as a day.
+const MAX_REPORTED_MS = 86_400_000;
+const reportedMs = (ms: number) => Math.min(MAX_REPORTED_MS, ms);
+/** Waits between resends of a review report: 1 s, doubling to a minute. */
+const reportRetryDelay = (attempt: number) => Math.min(60_000, 1_000 * 2 ** attempt);
 
 /**
- * One review panel's cards: shows one, reveals it, reports it graded or left, and shows the next, which it asks for
- * while the current one is shown (without it), once every grade before has reached the collector. Counts on screen are
- * the latest answer's, less the cards graded after it went out.
+ * One review panel's cards: shows one, reports it graded or left, and asks for the next while it is shown, once earlier
+ * reports have had a first answer. A report that may not have arrived is resent under its uid until stored, its card
+ * excluded meanwhile; cards served but never shown are released. Counts are the latest answer's, less later grades.
  */
 export class ReviewSession {
   private readonly deps: ReviewSessionDeps;
@@ -100,6 +109,8 @@ export class ReviewSession {
   private request: Request | null = null;
   private readonly graded: Array<AnnotationReviewCard["queue"]> = [];
   private reports: Promise<unknown> = Promise.resolve();
+  /** Graded cards whose report the collector does not have yet. */
+  private readonly unstored = new Set<string>();
   private more = false;
   private retry: ReturnType<typeof setTimeout> | undefined;
 
@@ -111,7 +122,7 @@ export class ReviewSession {
   start() {
     this.leave();
     this.update({ phase: "loading" });
-    this.ask([]);
+    this.ask();
   }
 
   /** "Review more" once the day is done: new cards beyond today's limit, from now on. */
@@ -156,14 +167,20 @@ export class ReviewSession {
     }
     this.update({ phase: "loading" });
     // The answer still out may be a card; a null or an error from before this grade is asked again.
-    if (!request || value) this.ask([]);
+    if (!request || value) this.ask();
   }
 
-  /** Reports the card on screen as left without a grade and drops what is still to come. */
+  /**
+   * Reports the card on screen as left without a grade and drops what is still to come, releasing a card the collector
+   * served that was never shown (an answer still out is released when it comes).
+   */
   leave() {
     const shown = this.shown;
     this.shown = null;
-    if (shown) this.send(shown);
+    if (shown?.at !== undefined) this.send(shown);
+    else if (shown) this.deps.release([shown.card.id]);
+    const value = this.request?.value;
+    if (value && "card" in value && value.card) this.deps.release([value.card.id]);
     this.generation += 1;
     this.request = null;
     clearTimeout(this.retry);
@@ -195,18 +212,29 @@ export class ReviewSession {
     const shownMs = graded
       ? graded.gradeMs
       : Math.max(0, Math.round(this.deps.clock() - shown.shownAt));
-    const sent = this.deps.report({
+    const item: ReviewItem = {
       kind: "review",
       at: shown.at,
       card: shown.card.id,
       word: shown.card.ja,
-      revealMs: shown.revealMs,
-      shownMs,
+      revealMs: shown.revealMs === null ? null : reportedMs(shown.revealMs),
+      shownMs: reportedMs(shownMs),
       source: "desktop",
       uid: shown.uid,
-      ...graded,
-    });
-    this.reports = Promise.allSettled([this.reports, sent]);
+      ...(graded ? { grade: graded.grade, gradeMs: reportedMs(graded.gradeMs) } : {}),
+    };
+    this.reports = Promise.allSettled([this.reports, this.deliver(item, 0)]);
+  }
+
+  /** Sends `item`, and again after a while for as long as it may not have arrived; settles on the first answer. */
+  private async deliver(item: ReviewItem, attempt: number): Promise<void> {
+    const outcome = await this.deps.report(item).catch(() => "failed" as const);
+    if (outcome !== "failed") {
+      this.unstored.delete(item.card);
+      return;
+    }
+    if (item.grade !== undefined) this.unstored.add(item.card);
+    setTimeout(() => void this.deliver(item, attempt + 1), reportRetryDelay(attempt));
   }
 
   /** Every report sent so far has settled, so the collector knows each grade. */
@@ -218,17 +246,22 @@ export class ReviewSession {
     } while (reports !== this.reports);
   }
 
-  private ask(exclude: ReadonlyArray<string>) {
+  /** Asks for a card once earlier reports have had their first answer, excluding the cards held then. */
+  private ask() {
     const generation = this.generation;
     const request: Request = { graded: this.graded.length };
     this.request = request;
     void this.settled().then(async () => {
       if (generation !== this.generation) return;
       request.graded = this.graded.length;
+      const held = new Set([...(this.shown ? [this.shown.card.id] : []), ...this.unstored]);
       const value = await this.deps
-        .fetchNext({ exclude, more: this.more })
+        .fetchNext({ exclude: [...held].slice(0, MAX_EXCLUDE), more: this.more })
         .catch((): ReviewFetched => ({ detail: "request failed" }));
-      if (generation !== this.generation || this.request !== request) return;
+      if (generation !== this.generation || this.request !== request) {
+        if ("card" in value && value.card) this.deps.release([value.card.id]);
+        return;
+      }
       request.value = value;
       this.answered(request, value);
     });
@@ -245,7 +278,7 @@ export class ReviewSession {
     }
     this.request = null;
     if (!("card" in value && value.card !== null) && request.graded < this.graded.length) {
-      this.ask([]);
+      this.ask();
       return;
     }
     this.present(value, request);
@@ -269,6 +302,6 @@ export class ReviewSession {
     const uid = this.deps.uid();
     this.shown = { card: value.card, uid, revealMs: null };
     this.update({ phase: "card", card: value.card, uid, revealed: false });
-    this.ask([value.card.id]);
+    this.ask();
   }
 }
