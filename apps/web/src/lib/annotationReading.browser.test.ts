@@ -252,6 +252,39 @@ describe("reading signals in a message", () => {
     expect(left?.kind === "visible" && left.wall).toBeLessThan(5_000 + PAUSE_MS + 2_000); // not the whole time away
   });
 
+  it("sends a stay that a new level ends with the level and annotations it was read at", () => {
+    using _reading = setup();
+    const observer = FakeIntersectionObserver.last!;
+    const container = document.createElement("div");
+    container.innerHTML = '<p>Read the <abbr data-markdown-abbreviation="">CSP</abbr> notes.</p>';
+    document.body.append(container);
+    using _mounted = { [Symbol.dispose]: () => container.remove() };
+    const paragraph = container.querySelector("p")!;
+    const registerAt = (level: number) =>
+      registerReadingMessage({ container, view: "v1", context: "m:levels", level, report });
+    let stop = registerAt(1);
+    document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    observer.show(paragraph, true);
+    vi.advanceTimersByTime(2_000);
+    // A lower level renders the message again before it registers at that level.
+    paragraph.innerHTML = 'Read the policy <abbr data-markdown-abbreviation="">notes</abbr>.';
+    stop();
+    stop = registerAt(0);
+    observer.show(paragraph, true);
+    vi.advanceTimersByTime(2_000);
+    observer.show(paragraph, false);
+    stop();
+    expect(
+      stays().map((item) => ({
+        level: item.level,
+        annotations: item.annotations.map(([text]) => text),
+      })),
+    ).toEqual([
+      { level: 1, annotations: ["CSP"] },
+      { level: 0, annotations: ["notes"] },
+    ]);
+  });
+
   it("reports a message's word count when it is first on screen, once even if it remounts", () => {
     using reading = setup();
     const observer = FakeIntersectionObserver.last!;

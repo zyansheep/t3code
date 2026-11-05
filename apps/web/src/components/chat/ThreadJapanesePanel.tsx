@@ -28,8 +28,8 @@ const HIGHEST_LEVEL = 3;
 const STATUS_CLASS = "shrink-0 text-2xs font-normal tabular-nums text-muted-foreground";
 
 /**
- * Chat Japanese from the language-learning tool's collector: English only, and the level of Japanese. Shown only when
- * this client's own server (else the thread's) has a collector.
+ * Chat Japanese from the language-learning tool's collector: English only, and the level of Japanese, which messages
+ * already on screen take on at once. Shown only when this client's own server (else the thread's) has a collector.
  */
 export function ThreadJapanesePanel(props: { readonly environmentId: EnvironmentId }) {
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
@@ -42,9 +42,7 @@ export function ThreadJapanesePanel(props: { readonly environmentId: Environment
   if (status === null) return null;
 
   const { english, intensity } = status;
-  // A level that ended reads as normal until the next refresh brings the collector's.
-  const levelEnded = intensity.until > 0 && intensity.until <= now;
-  const level = levelEnded ? 0 : intensity.level;
+  const { level } = intensity;
   const run = async (change: () => Promise<void>) => {
     setBusy(true);
     await change();
