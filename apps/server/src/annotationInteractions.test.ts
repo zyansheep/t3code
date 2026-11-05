@@ -79,6 +79,7 @@ describe("forwardAnnotationInteractions", () => {
         position: 0,
         box: [0, 0, 0, 0],
         annotations: [["mondai", 0, 0]],
+        level: -2,
         uid: "phone-s1-1",
       } as const;
       const { requests, run } = forwardWith(
