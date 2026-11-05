@@ -36,6 +36,7 @@ import { useSelectWorkspaceTab } from "../layout/workspace/useSelectWorkspaceTab
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import { WorkspaceListEmptyDetail } from "../layout/workspace/WorkspaceListEmptyDetail";
 import { WorkspaceListHeader } from "../layout/workspace/WorkspaceListHeader";
+import { WordReviewButton } from "../word-review/WordReviewButton";
 import { buildHomeListFilterMenuItems } from "./home-list-filter-menu";
 
 export function HomeRouteScreen() {
@@ -175,6 +176,7 @@ export function HomeRouteScreen() {
             placeholder: "Search",
             accessibilityLabel: "Search threads",
           }}
+          trailing={<WordReviewButton />}
           filter={{
             customized: selectedEnvironmentId !== null || selectedProjectKey !== null,
             items: buildHomeListFilterMenuItems({
