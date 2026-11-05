@@ -64,7 +64,9 @@ describe("rehypeChatLevel over the review corpus", () => {
     "shows no tag still being written in a streaming reply: %s",
     (_name, source) => {
       for (const level of LEVELS) {
-        expect(textAt(source, level, { streaming: true })).not.toMatch(/<\/?[a-z]/iu);
+        expect(textAt(source, level, { streaming: true })).not.toMatch(
+          /<\/?(?:abbr|span)\b|<\/?(?:a|ab|abb|s|sp|spa)?$/iu,
+        );
       }
     },
   );
@@ -131,26 +133,41 @@ describe("rehypeChatLevel with malformed twins", () => {
 });
 
 describe("rehypeChatLevel while a reply streams", () => {
-  const prefix = (name: string) => (corpus as Record<string, string>)[name]!;
+  const LEAD =
+    'The <abbr title="もんだい · problem" data-en="problem" data-on="-2">問題</abbr> is small.\n\n- ';
+  const JA =
+    '<span data-jw="ja" data-on="-1"><abbr title="きょう · today">今日</abbr>は<abbr title="あめ · rain">雨</abbr>です<abbr title="It is raining today.">。</abbr></span>';
 
   it("follows the threshold of the twin still open at the end, and renders the rest as usual", () => {
     // The Japanese twin of a sentence at -1 is still being written.
-    const writing = prefix("stream_06");
-    expect(textAt(writing, -2, { streaming: true })).toBe(
-      "The build failed on the parse step. The 問題 is small.",
-    );
-    expect(textAt(writing, -1, { streaming: true })).toBe(
-      "The build failed on the parse step. The 問題 is small. 今日は",
-    );
+    const writing = `${LEAD}<span data-jw="ja" data-on="-1"><abbr title="きょう · today">今日</abbr>は<abbr ti`;
+    expect(textAt(writing, -2, { streaming: true })).toBe("The 問題 is small.");
+    expect(textAt(writing, -1, { streaming: true })).toBe("The 問題 is small. 今日は");
     // Finished, the same open twin breaks the message, which still shows no Japanese below the threshold.
-    expect(textAt(writing, -2)).toBe("The build failed on the parse step. The 問題 is small.");
+    expect(textAt(writing, -2)).toBe("The 問題 is small.");
     // Finished, it is its sentence's translation until its English twin arrives.
-    const finished = prefix("stream_09");
-    expect(textAt(finished, -2, { streaming: true })).toContain(RAINING);
+    expect(textAt(`${LEAD}${JA}<span data-jw`, -2, { streaming: true })).toContain(RAINING);
     // Its English twin is being written: shown below the threshold, hidden at it.
-    const english = prefix("stream_11");
-    expect(textAt(english, -2, { streaming: true })).toContain(RAINING);
-    expect(textAt(english, -1, { streaming: true })).toContain(RAIN);
-    expect(textAt(english, -1, { streaming: true })).not.toContain("It is");
+    const english = `${LEAD}${JA}<span data-jw="en" data-on="-1">It is raini`;
+    expect(textAt(english, -2, { streaming: true })).toBe("The 問題 is small. It is raini");
+    expect(textAt(english, -1, { streaming: true })).toBe(`The 問題 is small. ${RAIN}`);
+  });
+
+  it("cuts only an abbr or span tag still arriving at the end, not prose with a <", () => {
+    const word = '<abbr title="もんだい · problem" data-en="problem" data-on="1">問題</abbr> then';
+    for (const prose of [" x<y and more", " Vec<T and", " press <Enter to go", " see <!-- note"]) {
+      expect(textAt(word + prose, 0, { streaming: true })).toBe(`problem then${prose}`);
+    }
+    for (const partial of [
+      " <",
+      " </",
+      " <a",
+      " <abb",
+      ' <abbr title="x > y',
+      " </spa",
+      " <span data-jw='ja",
+    ]) {
+      expect(textAt(word + partial, 0, { streaming: true })).toBe("problem then");
+    }
   });
 });
