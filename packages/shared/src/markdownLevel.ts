@@ -260,8 +260,10 @@ function renderAt(tree: HastNode, level: number, streaming: boolean) {
   withChildren(tree);
 }
 
-// A tag still being written at the end of a streaming reply, which would show as text until it closes.
-const PARTIAL_TAG = /<(?:\/?[A-Za-z!][^<>]*)?$/u;
+// An abbr or span tag at the end of a streaming reply, at any point before its `>`; a quoted attribute value may
+// hold a `>`. The phone's pattern, with an open single-quoted value allowed too.
+const PARTIAL_TAG =
+  /<\/?(?:(?:abbr|span)(?:\s(?:[^<>"']|"[^"]*"|'[^']*')*(?:"[^"]*|'[^']*)?)?|a(?:bb?)?|s(?:pa?)?)?$/iu;
 
 /** The element holding the last text outside code that isn't only whitespace. */
 function lastProseParent(node: HastNode): HastNode | null {
