@@ -98,10 +98,28 @@ export function createGlossOpenQueue(options: GlossOpenQueueOptions) {
   let entries: ReadonlyArray<QueuedGlossOpen> = [];
   let flushing: Promise<void> | null = null;
   let flushAgain = false;
+  /** Who waits on an item's fate, by uid: true once its server took it, false if it was dropped unsent. */
+  const waiters = new Map<string, Array<(taken: boolean) => void>>();
+
+  const settle = (uids: Iterable<string | undefined>, taken: boolean) => {
+    for (const uid of uids) {
+      if (uid === undefined) continue;
+      for (const resolve of waiters.get(uid) ?? []) resolve(taken);
+      waiters.delete(uid);
+    }
+  };
 
   const bounded = (list: ReadonlyArray<QueuedGlossOpen>) => {
     const oldest = options.now() - MAX_AGE_MS;
-    return list.filter((entry) => entry.item.at >= oldest).slice(-MAX_QUEUED);
+    const kept = list.filter((entry) => entry.item.at >= oldest).slice(-MAX_QUEUED);
+    if (kept.length < list.length) {
+      const left = new Set(kept.map((entry) => entry.item.uid));
+      settle(
+        list.filter((entry) => !left.has(entry.item.uid)).map((entry) => entry.item.uid),
+        false,
+      );
+    }
+    return kept;
   };
 
   const persist = async () => {
@@ -131,6 +149,7 @@ export function createGlossOpenQueue(options: GlossOpenQueueOptions) {
 
   const remove = (taken: ReadonlySet<string | undefined>) => {
     entries = entries.filter((entry) => !taken.has(entry.item.uid));
+    settle(taken, true);
   };
 
   const drain = async () => {
@@ -180,5 +199,17 @@ export function createGlossOpenQueue(options: GlossOpenQueueOptions) {
     await persist();
   };
 
-  return { add, flush, pending: () => entries };
+  /**
+   * Settles once the item with `uid` has left the queue: true when its server took it (in this flush or a later
+   * retry), false when it was dropped unsent. An item not queued counts as taken.
+   */
+  const settled = (uid: string): Promise<boolean> =>
+    loaded.then(() => {
+      if (!entries.some((entry) => entry.item.uid === uid)) return true;
+      return new Promise<boolean>((resolve) => {
+        waiters.set(uid, [...(waiters.get(uid) ?? []), resolve]);
+      });
+    });
+
+  return { add, flush, settled, pending: () => entries };
 }
