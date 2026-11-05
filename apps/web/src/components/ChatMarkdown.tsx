@@ -1866,6 +1866,9 @@ function ChatMarkdown({
     ? [...sharedRemarkPlugins, ...extraRemarkPlugins, createIncrementalMarkdownPlugin()]
     : withExtraPlugins(sharedRemarkPlugins, extraRemarkPlugins);
   const blocks = streamingBlocks ?? [text];
+  // Only the last block of a streaming reply is still being written; a tag still arriving at its end is cut, whether
+  // or not the reply has levels yet.
+  const isWriting = (index: number) => props.isStreaming === true && index === blocks.length - 1;
   // Only messages with raw <abbr> markup mount the shared expansion popover.
   const hasAbbreviations = parseRawHtml && /<abbr\b/i.test(text);
   // A message that carries its Japanese at every level renders at the reader's current one.
@@ -1976,12 +1979,11 @@ function ChatMarkdown({
               rehypePlugins={
                 !parseRawHtml
                   ? CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
-                  : (annotated && englishOnly) || hasLevels
+                  : (annotated && englishOnly) || hasLevels || isWriting(index)
                     ? levelRehypePlugins(
-                        englishOnly ? -3 : level,
+                        englishOnly ? -3 : hasLevels ? level : 0,
                         englishOnly,
-                        // Only the last block of a streaming reply is still being written.
-                        props.isStreaming === true && index === blocks.length - 1,
+                        isWriting(index),
                       )
                     : CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
               }
