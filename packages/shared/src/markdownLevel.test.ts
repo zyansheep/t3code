@@ -86,11 +86,13 @@ describe("rehypeChatLevel with malformed twins", () => {
     // Broken: every pair shows its English twin, and a split Japanese twin leaves nothing below its threshold.
     ["blank_line_in_ja", RAINING, `今日は 雨です。${RAINING}`],
     ["blank_line_in_en", "It is raining.", "It is raining."],
-    ["unclosed_ja", `Intro. ${RAINING} Outro.`, `Intro. ${RAIN}${RAINING} Outro.`],
+    // A Japanese twin left open ends where its English twin starts: a pair, in a broken message.
+    ["unclosed_ja", `Intro. ${RAINING} Outro.`, `Intro. ${RAINING} Outro.`],
     ["unclosed_en", "Intro. It is raining. Outro.", "Intro. It is raining. Outro."],
     ["nested_twin", "outer", "outer"],
+    // A comment between twins keeps them apart.
+    ["comment_between", `${RAINING}${RAINING}`, `${RAIN}${RAINING}`],
     // Fine as written.
-    ["comment_between", RAINING, RAIN],
     ["br_in_ja", RAINING, "今日は 雨です。"],
     // An empty data-en falls back to the gloss's meaning; a self-closing level tag is dropped.
     ["en_empty", "The problem is small.", "The 問題 is small."],
@@ -98,6 +100,26 @@ describe("rehypeChatLevel with malformed twins", () => {
   ])("%s", (name, below, at) => {
     const source = (corpus as Record<string, string>)[name]!;
     expect([textAt(source, 0), textAt(source, 1)]).toEqual([below, at]);
+  });
+
+  it("pairs twins with a newline or a no-break space between, not a blank line", () => {
+    const twins = (between: string) =>
+      `<span data-jw="ja" data-on="1">${RAIN}</span>${between}<span data-jw="en" data-on="1">${RAINING}</span>`;
+    expect(textAt(twins("\n"), 0)).toBe(RAINING);
+    expect(textAt(twins("\u00a0"), 1)).toBe(RAIN);
+    // Without a sentence mark gloss, the lone Japanese twin is nothing below its threshold.
+    expect(textAt(twins("\n\n"), 0)).toBe(RAINING);
+    expect(textAt(twins("\n\n"), 1)).toBe(`${RAIN} ${RAINING}`);
+  });
+
+  it("ignores a self-closing abbr, and renders an abbr left open in a finished message as written", () => {
+    expect(textAt('One <abbr title="a · b"/>two.', 0)).toBe("One two.");
+    const open =
+      'The <abbr title="もんだい · problem" data-en="problem" data-on="1">問題 is small.';
+    expect(textAt(open, 0)).toBe("The 問題 is small.");
+    // Still arriving, it follows its threshold, as plain text until it closes.
+    expect(textAt(open, 0, { streaming: true })).toBe("The problem");
+    expect(textAt(open, 1, { streaming: true })).toBe("The 問題 is small.");
   });
 
   it("renders a twin or word whose threshold is not -2 to 3 as written", () => {
@@ -122,6 +144,9 @@ describe("rehypeChatLevel while a reply streams", () => {
     );
     // Finished, the same open twin breaks the message, which still shows no Japanese below the threshold.
     expect(textAt(writing, -2)).toBe("The build failed on the parse step. The 問題 is small.");
+    // Finished, it is its sentence's translation until its English twin arrives.
+    const finished = prefix("stream_09");
+    expect(textAt(finished, -2, { streaming: true })).toContain(RAINING);
     // Its English twin is being written: shown below the threshold, hidden at it.
     const english = prefix("stream_11");
     expect(textAt(english, -2, { streaming: true })).toContain(RAINING);
