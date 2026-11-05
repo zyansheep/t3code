@@ -6,6 +6,7 @@ import {
   hasLevelMarkup,
   markdownAtLevel,
   markdownEnglishOnly,
+  withoutPartialTag,
 } from "./markdownLevels";
 import { glossHref } from "./markdownGlosses";
 
@@ -374,6 +375,29 @@ describe("markdownAtLevel on markup the weave did not write", () => {
   it.each(cases)("$name", ({ markdown, below, at: shown }) => {
     for (const level of [-3, -2, -1, 0]) expect(seen(markdown, level)).toBe(below);
     for (const level of [1, 2, 3]) expect(seen(markdown, level)).toBe(shown);
+  });
+
+  it("hides a tag half arrived at the end of a streaming message, level markup or none", () => {
+    const before = "The build failed on the `parse` step. The ";
+    for (const partial of [
+      "<",
+      "<a",
+      "<abb",
+      "<abbr ti",
+      '<abbr title="もんだい · problem" data-en="',
+      '<abbr title="a > b" data',
+      "</sp",
+      '<span data-jw="ja" data-on="1"',
+    ]) {
+      expect(withoutPartialTag(before + partial)).toBe(before);
+      expect(
+        markdownAtLevel(`${before}<abbr data-en="x" data-on="1">y</abbr> ${partial}`, -3, true),
+      ).toBe(`${before}x `);
+    }
+    // Not while finished, and not a tag that has arrived or another kind of tag.
+    expect(markdownAtLevel(`${before}<abbr ti`, -3)).toBe(`${before}<abbr ti`);
+    expect(withoutPartialTag(`${before}<abbr title="x">`)).toBe(`${before}<abbr title="x">`);
+    expect(withoutPartialTag(`${before}<div cl`)).toBe(`${before}<div cl`);
   });
 
   it("shows a swapped word with empty English as its gloss's meaning", () => {
