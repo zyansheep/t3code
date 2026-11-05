@@ -137,6 +137,29 @@ describe("createGlossOpenQueue", () => {
     expect(sent.map((call) => call.uids)).toEqual([["phone-s1-1"], ["phone-s1-1"]]);
   });
 
+  it("settles an item's fate only when it leaves the queue: taken on a retry, or dropped unsent", async () => {
+    // A server that could not store a review refuses the whole report, which stays queued.
+    let storing = false;
+    const { queue } = harness({ send: () => storing });
+    await queue.add(entry(1));
+    let fate: boolean | undefined;
+    void queue.settled("phone-s1-1").then((taken) => {
+      fate = taken;
+    });
+    await queue.flush();
+    expect(fate).toBeUndefined();
+    storing = true;
+    await queue.flush();
+    expect(fate).toBe(true);
+    await expect(queue.settled("never-queued")).resolves.toBe(true);
+
+    const full = harness({ send: () => false });
+    await full.queue.add(entry(1));
+    const dropped = full.queue.settled("phone-s1-1");
+    for (let i = 2; i <= 301; i += 1) await full.queue.add(entry(i));
+    await expect(dropped).resolves.toBe(false);
+  });
+
   it("never rejects when sending or saving throws", async () => {
     const queue = createGlossOpenQueue({
       load: async () => {
