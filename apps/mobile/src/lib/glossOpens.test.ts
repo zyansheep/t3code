@@ -83,6 +83,27 @@ describe("glossOpenItem", () => {
     expect(open(3, "mondai").view).toBe(a.view);
   });
 
+  it("carries the level its message was rendered at, through the report's contract", () => {
+    const opened = (level: number | undefined) =>
+      glossOpenItem({
+        session: "s1",
+        sequence: 1,
+        messageText: "raw text",
+        word: "mondai",
+        at: NOW,
+        level,
+      })!;
+    for (const level of [-3, 0, 2, 3]) {
+      const item = opened(level);
+      expect(item.level).toBe(level);
+      expect(decodeReport({ items: [item] }).items[0]).toEqual(item);
+      expect(isItem(item)).toBe(true);
+    }
+    // Rendered at no level (a markdown view without one), or at one the contract does not take: no level, still sent.
+    for (const level of [undefined, 4, -4, 1.5]) expect(opened(level)).not.toHaveProperty("level");
+    expect(() => decodeReport({ items: [{ ...opened(0), level: 4 }] })).toThrow();
+  });
+
   it("hashes as the desktop does", () => {
     expect(fnv1a32("")).toBe(0x811c9dc5);
     expect(fnv1a32("a")).toBe(0xe40c292c);
