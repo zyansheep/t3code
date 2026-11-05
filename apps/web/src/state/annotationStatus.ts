@@ -95,6 +95,8 @@ interface Watched {
   inFlight: boolean;
   attemptedAt: number;
   expiry: ReturnType<typeof setTimeout> | null;
+  /** Presses (level steps and English only) sent so far, so a read that started before one is not kept. */
+  presses: number;
 }
 
 const watched = new Map<EnvironmentId, Watched>();
@@ -102,7 +104,7 @@ const watched = new Map<EnvironmentId, Watched>();
 function entry(environmentId: EnvironmentId): Watched {
   let watch = watched.get(environmentId);
   if (!watch) {
-    watch = { settled: false, inFlight: false, attemptedAt: 0, expiry: null };
+    watch = { settled: false, inFlight: false, attemptedAt: 0, expiry: null, presses: 0 };
     watched.set(environmentId, watch);
   }
   return watch;
@@ -163,6 +165,7 @@ export async function refreshAnnotationStatus(environmentId: EnvironmentId): Pro
   if (watch.inFlight) return;
   watch.inFlight = true;
   watch.attemptedAt = Date.now();
+  const presses = watch.presses;
   const result = await runAtomCommand(
     appAtomRegistry,
     getAnnotationStatus,
@@ -170,6 +173,11 @@ export async function refreshAnnotationStatus(environmentId: EnvironmentId): Pro
     { reportFailure: false, reportDefect: false },
   );
   watch.inFlight = false;
+  // A press since it started may have changed what it read: read again instead.
+  if (watch.presses !== presses) {
+    void refreshAnnotationStatus(environmentId);
+    return;
+  }
   if (result._tag === "Success") {
     watch.settled = true;
     setStatus(environmentId, result.value);
@@ -219,6 +227,7 @@ export async function setEnglishOnly(
   environmentId: EnvironmentId,
   on: boolean,
 ): Promise<AnnotationChange<AnnotationEnglish> | null> {
+  entry(environmentId).presses += 1;
   const result = await runAtomCommand(
     appAtomRegistry,
     setAnnotationEnglish,
@@ -234,6 +243,8 @@ export async function setEnglishOnly(
     intensity: current?.intensity ?? { level: 0, until: 0 },
     english: result.value,
   });
+  // The level was a guess: read it now.
+  if (!current) void refreshAnnotationStatus(environmentId);
   return { ok: true, value: result.value };
 }
 
@@ -242,6 +253,7 @@ export async function stepAnnotationLevel(
   environmentId: EnvironmentId,
   step: 1 | -1,
 ): Promise<AnnotationChange<AnnotationStatus["intensity"]> | null> {
+  entry(environmentId).presses += 1;
   const result = await runAtomCommand(
     appAtomRegistry,
     adjustAnnotationIntensity,
@@ -252,11 +264,12 @@ export async function stepAnnotationLevel(
     const reason = failureReason(result);
     return reason === null ? null : { ok: false, reason };
   }
-  // A press before the status was read is still the collector's answer; English only is off until read.
+  // A press before the status was read is still the collector's answer; English only is a guess until read now.
   const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
   setStatus(environmentId, {
     english: current?.english ?? { on: false, until: 0, at: 0 },
     intensity: result.value,
   });
+  if (!current) void refreshAnnotationStatus(environmentId);
   return { ok: true, value: result.value };
 }
