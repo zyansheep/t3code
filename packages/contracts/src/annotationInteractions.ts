@@ -65,6 +65,26 @@ export const AnnotationInteractionsReportInput = Schema.Struct({
 });
 export type AnnotationInteractionsReportInput = typeof AnnotationInteractionsReportInput.Type;
 
+/**
+ * A report with review items the collector did not store. `retryable`: it could not be reached or failed, so the whole
+ * batch can be sent again under the same uids. Otherwise `rejected` names the review items it refused, by index in
+ * `items`, with its reason; those are final, and every other item was stored.
+ */
+export class AnnotationReportError extends Schema.TaggedError<AnnotationReportError>()(
+  "AnnotationReportError",
+  {
+    detail: Schema.String,
+    retryable: Schema.Boolean,
+    rejected: Schema.optional(
+      Schema.Array(Schema.Struct({ item: Schema.Int, error: Schema.String })),
+    ),
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 /** One press of a chat shortcut that makes annotated words heavier (`1`) or lighter (`-1`) for a while. */
 export const AnnotationIntensityAdjustInput = Schema.Struct({
   step: Schema.Literals([1, -1]),
