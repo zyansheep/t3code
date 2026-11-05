@@ -417,22 +417,24 @@ const CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS = [
 ] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
 
 // After heading ids, so links to a heading keep working in English.
-const chatLevelRehypePlugins = (level: number, englishOnly: boolean) =>
+const chatLevelRehypePlugins = (level: number, englishOnly: boolean, streaming: boolean) =>
   [
     ...CHAT_MARKDOWN_REHYPE_PLUGINS,
     rehypeHeadingIds,
-    [rehypeChatLevel, { level, englishOnly }],
+    [rehypeChatLevel, { level, englishOnly, streaming }],
     rehypeTextDirection,
     rehypeChipPunctuation,
   ] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
 
-const CHAT_MARKDOWN_ENGLISH_REHYPE_PLUGINS = chatLevelRehypePlugins(-3, true);
-// One list per chat level, so each keeps its renderer and parse cache.
-const CHAT_MARKDOWN_LEVEL_REHYPE_PLUGINS = new Map(
-  [-3, -2, -1, 0, 1, 2, 3].map((level) => [level, chatLevelRehypePlugins(level, false)]),
-);
-const levelRehypePlugins = (level: number) =>
-  CHAT_MARKDOWN_LEVEL_REHYPE_PLUGINS.get(level) ?? chatLevelRehypePlugins(level, false);
+// One list per chat level and English only, finished or streaming, so each keeps its renderer and parse cache.
+const levelPluginLists = new Map<string, ReturnType<typeof chatLevelRehypePlugins>>();
+function levelRehypePlugins(level: number, englishOnly: boolean, streaming: boolean) {
+  const key = `${level} ${englishOnly} ${streaming}`;
+  let plugins = levelPluginLists.get(key);
+  if (!plugins)
+    levelPluginLists.set(key, (plugins = chatLevelRehypePlugins(level, englishOnly, streaming)));
+  return plugins;
+}
 
 const CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS = [
   rehypeHeadingIds,
@@ -2035,11 +2037,14 @@ function ChatMarkdown({
               rehypePlugins={
                 !parseRawHtml
                   ? CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
-                  : annotated && englishOnly
-                    ? CHAT_MARKDOWN_ENGLISH_REHYPE_PLUGINS
-                    : hasLevels
-                      ? levelRehypePlugins(level)
-                      : CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
+                  : (annotated && englishOnly) || hasLevels
+                    ? levelRehypePlugins(
+                        englishOnly ? -3 : level,
+                        englishOnly,
+                        // Only the last block of a streaming reply is still being written.
+                        props.isStreaming === true && index === blocks.length - 1,
+                      )
+                    : CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
               }
               shared={!uncachedPlugins}
               // Every block before the last is finished, so its parse can be reused.
