@@ -33,7 +33,11 @@ function withTimeout<A>(promise: Promise<A>, ms: number, late: A): Promise<A> {
 
 function fetchNextCard(
   environmentId: EnvironmentId,
-  request: { readonly exclude: ReadonlyArray<string>; readonly more: boolean },
+  request: {
+    readonly exclude: ReadonlyArray<string>;
+    readonly more: boolean;
+    readonly peek?: boolean;
+  },
 ): Promise<ReviewFetch> {
   const asked = runAtomCommand(
     appAtomRegistry,
@@ -44,6 +48,7 @@ function fetchNextCard(
         source: "mobile",
         exclude: [...request.exclude],
         ...(request.more ? { more: true } : {}),
+        ...(request.peek ? { peek: true } : {}),
       },
     },
     { reportFailure: false, reportDefect: false },
@@ -92,14 +97,14 @@ export function createWordReviewSession(environmentId: EnvironmentId) {
 }
 
 /**
- * Asks for the counts on the review badge, unless they are recent. There is no request for counts alone, so this asks
- * for a card it does not show, which the server takes as nothing (only a review item counts).
+ * Asks for the counts on the review badge, unless they are recent: a peek, which serves and records no card (a server
+ * from before peeks serves one, which is dropped here and counts as nothing, as only a review item does).
  */
 export function refreshReviewCounts(environmentId: EnvironmentId): void {
   const now = Date.now();
   if (now - (countsAskedAt.get(environmentId) ?? 0) < COUNTS_REFRESH_MS) return;
   countsAskedAt.set(environmentId, now);
-  void fetchNextCard(environmentId, { exclude: [], more: false }).then((result) => {
+  void fetchNextCard(environmentId, { exclude: [], more: false, peek: true }).then((result) => {
     if (result._tag === "answer" && result.counts) {
       appAtomRegistry.set(reviewCountsAtom(environmentId), result.counts);
     }
