@@ -126,6 +126,55 @@ describe("rehypeChatLevel", () => {
     expect(textAt(source, -3)).toContain("今");
   });
 
+  it("renders an element whose threshold is outside the contract as written", () => {
+    for (const on of ["-3", "4", "+1", "01", "1.5", "x"]) {
+      const source = `The <abbr title="もんだい · problem" data-en="problem" data-on="${on}">問題</abbr>.`;
+      expect(html(source, -3)).toBe(renderToStaticMarkup(asWritten(source, false)));
+      // Past the sanitizer too.
+      const abbr = {
+        type: "element",
+        tagName: "abbr",
+        properties: { dataEn: "problem", dataOn: on },
+        children: [{ type: "text", value: "問題" }],
+      };
+      const tree = { type: "root", children: [abbr] };
+      rehypeChatLevel({ level: -3, englishOnly: false })(tree);
+      expect(tree.children).toEqual([abbr]);
+    }
+  });
+
+  it("shows a swapped word without data-en as its gloss's meaning below its threshold", () => {
+    const source = 'The <abbr title="もんだい · problem / issue" data-on="1">問題</abbr> is small.';
+    expect(html(source, 0)).toBe("<p>The problem is small.</p>");
+    expect(textAt(source, 1)).toBe("The 問題 is small.");
+  });
+
+  it.each([
+    [
+      "a blank line in the Japanese twin",
+      '<span data-jw="ja" data-on="1"><abbr title="きょう · today">今日</abbr>は\n\n<abbr title="あめ · rain">雨</abbr>です<abbr title="It is raining today.">。</abbr></span><span data-jw="en" data-on="1">It is raining today.</span> Then more.',
+    ],
+    [
+      "a blank line in the English twin",
+      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>です<abbr title="It is rain.">。</abbr></span><span data-jw="en" data-on="1">It is\n\nrain.</span> Then more.',
+    ],
+    [
+      "a Japanese twin that never closes",
+      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr>です<abbr title="It is rain.">。</abbr><span data-jw="en" data-on="1">It is rain.</span> Then more.',
+    ],
+    [
+      "emphasis across the twins",
+      'Lead <span data-jw="ja" data-on="1">*<abbr title="あめ · rain">雨</abbr>です</span><span data-jw="en" data-on="1">It is rain*.</span> Then more.',
+    ],
+  ])("never shows a broken sentence's Japanese, at any level: %s", (_case, source) => {
+    for (const level of LEVELS) {
+      const text = textAt(source, level);
+      expect(JAPANESE.test(text), `${level}: ${text}`).toBe(false);
+      expect(text).toContain("rain");
+      expect(text).toContain("Then more.");
+    }
+  });
+
   it("keeps only well-formed level markup past the sanitizer", () => {
     const source =
       '<span data-jw="ja" data-on="x" onclick="alert(1)">今日</span><span data-jw="zz" data-on="1">today</span>';
