@@ -507,6 +507,10 @@
       "types": "./src/markdownPipeline.ts",
       "import": "./src/markdownPipeline.ts"
     },
+    "./markdownLevel": {
+      "types": "./src/markdownLevel.ts",
+      "import": "./src/markdownLevel.ts"
+    },
     "./threadFindText": {
       "types": "./src/threadFindText.ts",
       "import": "./src/threadFindText.ts"

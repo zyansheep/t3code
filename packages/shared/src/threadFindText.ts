@@ -28,6 +28,7 @@ import {
 import { parseAssistantCitationHref } from "./assistantCitations.ts";
 import type { OrchestrationV2ConversationMessage } from "@t3tools/contracts";
 import { proposedPlanTitle, stripDisplayedPlanMarkdown } from "./proposedPlanText.ts";
+import { type ChatLevel, rehypeChatLevel } from "./markdownLevel.ts";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
@@ -117,6 +118,7 @@ function markdownThreadFindText(
   skills: readonly InlineSkill[] = [],
   lineBreaks = false,
   renderInsights = false,
+  level?: ChatLevel,
 ): string[] {
   const processor = userMessage
     ? userProcessor
@@ -129,6 +131,7 @@ function markdownThreadFindText(
       : insightProcessor
     : processor;
   const tree = renderer.runSync(renderer.parse(markdown), markdown);
+  if (level) rehypeChatLevel(level)(tree, { value: markdown });
   const paths = [
     ...extractMarkdownLinkHrefs(renderCodexInlineDirectivesAsMarkdown(markdown)),
     ...extractInlineCodeSpans(markdown).flatMap((span) => inlineCodeFilePathCandidate(span) ?? []),
@@ -226,10 +229,12 @@ export function searchablePlanSegments(markdown: string, cwd?: string): readonly
   ];
 }
 
+/** `level` is the chat level the client renders assistant messages at, so find counts only what it shows. */
 export function searchableMessageSegments(
   message: Pick<OrchestrationV2ConversationMessage, "role" | "text" | "streaming" | "context">,
   cwd?: string,
   skills: readonly InlineSkill[] = [],
+  level?: ChatLevel,
 ): readonly string[] | null {
   if (message.role === "user") {
     // Clients hide this prompt, so find must not match text nobody can see.
@@ -245,5 +250,6 @@ export function searchableMessageSegments(
     skills,
     shouldPreserveAssistantLineBreaks(message.text),
     true,
+    level,
   );
 }

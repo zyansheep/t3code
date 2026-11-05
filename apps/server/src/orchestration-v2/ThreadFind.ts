@@ -57,12 +57,16 @@ class TextKey extends Data.Class<{
   hasContext: boolean;
   cwd: string | undefined;
   skills: NonNullable<OrchestrationV2SearchThreadInput["skills"]>;
+  /** The client's chat level for assistant messages, flat so keys compare by value; `null` reads them as written. */
+  level: number | null;
+  englishOnly: boolean;
 }> {}
 
 function textKey(
   item: OrchestrationV2TurnItem,
   cwd: string | undefined,
   skills: TextKey["skills"],
+  chatLevel: OrchestrationV2SearchThreadInput["chatLevel"],
 ) {
   return new TextKey({
     text:
@@ -77,6 +81,8 @@ function textKey(
     hasContext: item.type === "user_message" && item.context !== undefined,
     cwd,
     skills,
+    level: item.type === "assistant_message" && chatLevel ? chatLevel.level : null,
+    englishOnly: item.type === "assistant_message" && chatLevel ? chatLevel.englishOnly : false,
   });
 }
 
@@ -92,6 +98,7 @@ function parseText(key: TextKey): readonly string[] {
         },
         key.cwd,
         key.skills,
+        key.level === null ? undefined : { level: key.level, englishOnly: key.englishOnly },
       ) ?? []);
 }
 
@@ -192,6 +199,7 @@ export const makeThreadFind = Effect.fn("makeThreadFind")(function* (
         cwd: Schema.optional(Schema.String),
         query: Schema.String,
         skills: OrchestrationV2SearchThreadInput.fields.skills,
+        chatLevel: OrchestrationV2SearchThreadInput.fields.chatLevel,
       }),
     ),
   );
@@ -302,6 +310,7 @@ export const makeThreadFind = Effect.fn("makeThreadFind")(function* (
         cwd,
         query: input.query,
         skills: input.skills ?? [],
+        ...(input.chatLevel ? { chatLevel: input.chatLevel } : {}),
       });
       const cached = scans.get(cacheKey);
       if (cached && cached.sequence === (yield* readRevision(cached.sourceThreadIds))) {
@@ -411,7 +420,7 @@ export const makeThreadFind = Effect.fn("makeThreadFind")(function* (
             documents.set(row.position, document);
             return document;
           }
-          const key = textKey(decoded.item, cwd, input.skills ?? []);
+          const key = textKey(decoded.item, cwd, input.skills ?? [], input.chatLevel);
           const segments = yield* Cache.get(
             key.text.length <= 32_768 ? textCache.text : textCache.largeText,
             key,
