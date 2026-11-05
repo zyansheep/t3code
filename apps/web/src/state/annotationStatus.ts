@@ -1,11 +1,13 @@
-import type { AnnotationEnglish, AnnotationStatus, EnvironmentId } from "@t3tools/contracts";
+import { type AnnotationEnglish, AnnotationStatus, type EnvironmentId } from "@t3tools/contracts";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
   runAtomCommand,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
+import * as Schema from "effect/Schema";
 
 import { visibleReadingContexts } from "../lib/annotationReading";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -36,16 +38,52 @@ export const englishOnlyAtom = Atom.family((environmentId: EnvironmentId | null)
   ).pipe(Atom.withLabel("annotation-english-only")),
 );
 
+/** Whether the server's status is known, so reports can say which level a message was rendered at. */
+export const annotationStatusKnownAtom = Atom.family((environmentId: EnvironmentId | null) =>
+  Atom.make((get) =>
+    environmentId === null ? false : get(annotationStatusAtom(environmentId)) !== null,
+  ).pipe(Atom.withLabel("annotation-status-known")),
+);
+
 /**
- * The level chat messages render at, from -3 (no Japanese) to 3: English only renders as -3, and a server whose status
- * is unknown as normal. A number, so only a change re-renders messages.
+ * The level chat messages render at, from -3 (no Japanese) to 3: English only renders as -3. Until the server's status
+ * is known, the last one this browser stored for it, else normal. A number, so only a change re-renders messages.
  */
 export const chatLevelAtom = Atom.family((environmentId: EnvironmentId | null) =>
   Atom.make((get) => {
-    const status = environmentId === null ? null : get(annotationStatusAtom(environmentId));
+    if (environmentId === null) return 0;
+    const status =
+      get(annotationStatusAtom(environmentId)) ?? storedStatus(environmentId, Date.now());
     return status === null ? 0 : status.english.on ? -3 : status.intensity.level;
   }).pipe(Atom.withLabel("annotation-level")),
 );
+
+const STORAGE_KEY_PREFIX = "t3.annotationStatus:";
+const decodeStored = Schema.decodeUnknownOption(Schema.fromJsonString(AnnotationStatus));
+
+// Reading localStorage throws where the browser blocks storage; that must not break the page.
+function storage(): Storage | undefined {
+  try {
+    return typeof window === "undefined" ? undefined : window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function storedStatus(environmentId: EnvironmentId, now: number): AnnotationStatus | null {
+  const stored = storage()?.getItem(STORAGE_KEY_PREFIX + environmentId);
+  const status = stored ? Option.getOrNull(decodeStored(stored)) : null;
+  return status && statusAt(status, now);
+}
+
+function storeStatus(environmentId: EnvironmentId, status: AnnotationStatus | null) {
+  try {
+    if (status) storage()?.setItem(STORAGE_KEY_PREFIX + environmentId, JSON.stringify(status));
+    else storage()?.removeItem(STORAGE_KEY_PREFIX + environmentId);
+  } catch {
+    // A full or blocked storage only loses the guess for the next start.
+  }
+}
 
 const REFRESH_MS = 5 * 60_000;
 const RETRY_MS = 10_000;
@@ -109,6 +147,7 @@ function setStatus(environmentId: EnvironmentId, status: AnnotationStatus | null
       Math.min(Math.min(...ends) - now, MAX_TIMEOUT_MS),
     );
   }
+  storeStatus(environmentId, current);
   appAtomRegistry.set(annotationStatusAtom(environmentId), current);
 }
 
