@@ -133,6 +133,8 @@ export function rehypePreserveAbbreviationTitles() {
 }
 
 const IMAGE_SRC_PROTOCOLS = [...(defaultSchema.protocols?.src ?? []), "file", "t3-context"];
+// The lowest chat level (data-on) at which a glossed word or a sentence's Japanese twin (data-jw) shows.
+const LEVEL_THRESHOLD = /^-?\d$/;
 
 // The sanitizer compares schemes case-sensitively, so lowercase accepted file link schemes first.
 function normalizeLocalFileHref(href: string): string {
@@ -177,10 +179,15 @@ export const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     ],
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
     // Spaces typed at the start of a user's line (keepLeadingWhitespace).
-    span: [...(defaultSchema.attributes?.span ?? []), "dataLeadingWhitespace"],
+    span: [
+      ...(defaultSchema.attributes?.span ?? []),
+      "dataLeadingWhitespace",
+      ["dataJw", "ja", "en"],
+      ["dataOn", LEVEL_THRESHOLD],
+    ],
     div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
     a: [...(defaultSchema.attributes?.a ?? []), "dataPullRequestAutolink"],
-    abbr: ["dataMarkdownTitle"],
+    abbr: ["dataMarkdownTitle", "dataEn", ["dataOn", LEVEL_THRESHOLD]],
     img: [
       ...(defaultSchema.attributes?.img ?? []),
       "dataDarkSrc",

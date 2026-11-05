@@ -40,6 +40,8 @@ export interface ReadingMessage {
   readonly container: HTMLElement;
   readonly view: string;
   readonly context: string;
+  /** The chat level the message is rendered at, for one with levels; a new level registers it again. */
+  readonly level?: number;
   readonly report: Report;
 }
 
@@ -149,6 +151,8 @@ export function tracePoint(
 
 interface Registered extends ReadingMessage {
   readonly blocks: Set<Element>;
+  /** Unregistered: its DOM may already show something else, such as another level. */
+  retired: boolean;
 }
 interface BlockStay extends Stay {
   readonly message: Registered;
@@ -157,6 +161,7 @@ interface BlockStay extends Stay {
 interface Trace {
   readonly message: Registered;
   readonly at: number;
+  readonly place: Place;
   readonly points: Array<[number, number, number]>;
 }
 
@@ -219,7 +224,8 @@ function ownerOf(target: EventTarget | null): Registered | null {
 }
 
 function base(message: Registered, at: number, place: Place) {
-  return { at, view: message.view, context: message.context, ...place };
+  const { view, context, level } = message;
+  return { at, view, context, ...(level === undefined ? {} : { level }), ...place };
 }
 
 function onClick(event: MouseEvent) {
@@ -288,8 +294,10 @@ function endTrace() {
   traceTimer = null;
   const done = trace;
   trace = null;
-  if (!done || done.points.length < 2 || !messages.has(done.message.container)) return;
-  const { place } = describeAnnotations(done.message.container);
+  if (!done || done.points.length < 2) return;
+  const place = done.message.retired
+    ? done.place
+    : describeAnnotations(done.message.container).place;
   enqueue(done.message, {
     ...base(done.message, done.at, place),
     kind: "trace",
@@ -309,7 +317,7 @@ function onPointer(event: PointerEvent | WheelEvent) {
   if (!message) return;
   const now = Date.now();
   const rect = message.container.getBoundingClientRect();
-  trace ??= { message, at: now, points: [] };
+  trace ??= { message, at: now, place: describeAnnotations(message.container).place, points: [] };
   const point: [number, number, number] = [
     now - trace.at,
     Math.round(event.clientX - rect.left),
@@ -357,7 +365,7 @@ function endStay(block: Element) {
   }
   if (stay.ms < STAY_MIN_MS) return;
   const { message } = stay;
-  const fresh = block.isConnected && message.container.isConnected;
+  const fresh = !message.retired && block.isConnected && message.container.isConnected;
   const place = fresh ? describeAnnotations(message.container).place : stay.snapshot.place;
   const where = fresh ? band(block, message.container) : stay.snapshot;
   enqueue(message, {
@@ -490,13 +498,14 @@ export function registerReadingMessage(message: ReadingMessage): () => void {
       (block) => !block.querySelector(BLOCK_SELECTOR) && block.querySelector(ANNOTATION_SELECTOR),
     ),
   );
-  const registered: Registered = { ...message, blocks };
+  const registered: Registered = { ...message, blocks, retired: false };
   messages.set(message.container, registered);
   for (const block of blocks) {
     blockOwners.set(block, registered);
     observer?.observe(block);
   }
   return () => {
+    registered.retired = true;
     for (const block of blocks) {
       endStay(block);
       inView.delete(block);
