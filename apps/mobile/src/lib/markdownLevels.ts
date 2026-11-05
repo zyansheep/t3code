@@ -159,14 +159,14 @@ const THRESHOLD = /^(-2|-1|0|1|2|3)$/;
 const LEVEL_MARKUP = /\sdata-on=/i;
 // What may stand between a Japanese twin and its English one: whitespace within a block.
 const BETWEEN_TWINS = /^\s*$/;
-// A Japanese word: kana and kanji, with the iteration and length marks, up to the first punctuation or space.
-const WORD_RUN =
-  /^[\u3005\u3006\u3040-\u30FF\u31F0-\u31FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF66-\uFF9F]+/;
+// The Japanese an unclosed word's text starts with, as the desktop takes it: Han, Hiragana and Katakana by script
+// extension, the long-vowel mark included.
+const WORD_RUN = /^[\p{scx=Han}\p{scx=Hira}\p{scx=Kana}]+/u;
 const BLANK_LINE = /\n[ \t]*\r?\n/;
 // An `<abbr>` or `<span>` tag at the end of a message still streaming in, at any point before its `>`; a quoted
 // attribute value may hold a `>`.
 const PARTIAL_TAG =
-  /<\/?(?:(?:abbr|span)(?:\s(?:[^<>"']|"[^"]*"|'[^']*')*(?:"[^"]*|'[^']*')?)?|a(?:bb?)?|s(?:pa?)?)?$/i;
+  /<\/?(?:(?:abbr|span)(?:\s(?:[^<>"']|"[^"]*"|'[^']*')*(?:"[^"]*|'[^']*)?)?|a(?:bb?)?|s(?:pa?)?)?$/i;
 
 interface HtmlTag {
   readonly start: number;
@@ -351,8 +351,8 @@ export function markdownAtLevel(source: string, level: number, streaming = false
       replace(abbr, english);
       continue;
     }
-    // A word left open in a finished message is its English at every level: its tag and the Japanese right after it
-    // go, and the rest of its block stays.
+    // A word left open in a finished message is its English at every level: its tag and the run of Japanese its text
+    // starts with go, and the rest of its block stays.
     const word = WORD_RUN.exec(markdown.slice(abbr.opening.end))?.[0] ?? "";
     edits.push({
       start: abbr.opening.start,
