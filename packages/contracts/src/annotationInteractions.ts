@@ -92,9 +92,10 @@ const AnnotationShown = Schema.Struct({
 });
 
 /**
- * One review card shown from a gloss popover's wedge (desktop) or the phone's flashcards: the card the collector
- * served, when it was shown, how long until its meaning was revealed (`null`: moved on or closed without revealing)
- * and how long it was on screen in all.
+ * One review card shown in the desktop's review panel or the phone's flashcards: the card the collector served, when it
+ * was shown, how long until its meaning was revealed (`null`: left without revealing) and how long it was on screen in
+ * all. A graded card carries its `grade` (1 Again, 2 Hard, 3 Good, 4 Easy) and `gradeMs`, with
+ * `revealMs <= gradeMs <= shownMs`; one without was left, which the collector does not schedule.
  */
 const AnnotationReview = Schema.Struct({
   kind: Schema.Literal("review"),
@@ -105,6 +106,8 @@ const AnnotationReview = Schema.Struct({
   shownMs: Duration,
   source: Schema.Literals(["desktop", "mobile"]),
   uid: Schema.optional(AnnotationId),
+  grade: Schema.optional(Schema.Literals([1, 2, 3, 4])),
+  gradeMs: Schema.optional(Duration),
 });
 
 export const AnnotationInteraction = Schema.Union([
@@ -179,25 +182,42 @@ export class AnnotationIntensityError extends Schema.TaggedError<AnnotationInten
   }
 }
 
-/** Asks the collector for the next card to review; `exclude` holds the ids of cards the client already has. */
+/**
+ * Asks the collector for the next card to review; `exclude` holds the ids of cards the client already has, and `more`
+ * (Review more, once the day is done) ignores today's new-card limit for this request.
+ */
 export const AnnotationReviewNextInput = Schema.Struct({
   source: Schema.Literals(["desktop", "mobile"]),
   exclude: Schema.Array(AnnotationId).check(Schema.isMaxLength(20)),
+  more: Schema.optional(Schema.Boolean),
 });
 export type AnnotationReviewNextInput = typeof AnnotationReviewNextInput.Type;
 
-/** A card to review: the word as written, its reading (may be empty) and its meaning. */
+const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
+/**
+ * A card to review: the word as written, its reading (may be empty) and its meaning, with its queue and, per grade,
+ * the seconds until it would come back (what Anki prints above its buttons). Collectors before scheduling send neither.
+ */
 export const AnnotationReviewCard = Schema.Struct({
   id: AnnotationId,
   ja: AnnotationText,
   kana: Schema.String.check(Schema.isMaxLength(ANNOTATION_TEXT_MAX_LENGTH)),
   gloss: Schema.String.check(Schema.isMaxLength(200)),
+  queue: Schema.optional(Schema.Literals(["new", "learning", "review"])),
+  intervals: Schema.optional(
+    Schema.Struct({ again: Duration, hard: Duration, good: Duration, easy: Duration }),
+  ),
 });
 export type AnnotationReviewCard = typeof AnnotationReviewCard.Type;
 
-/** The next card, or `null` when there is nothing to review. */
+/**
+ * The next card, or `null` when nothing is due now, with Anki's three numbers: new cards left today, learning cards
+ * due now and review cards due today (all 0: done for today).
+ */
 export const AnnotationReviewNextResult = Schema.Struct({
   card: Schema.NullOr(AnnotationReviewCard),
+  counts: Schema.optional(Schema.Struct({ new: Count, learning: Count, review: Count })),
 });
 export type AnnotationReviewNextResult = typeof AnnotationReviewNextResult.Type;
 
