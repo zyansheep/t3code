@@ -17,9 +17,7 @@ import {
   glossWord,
   hasGlossLinks,
   isGlossHref,
-  isReviewHref,
   markdownWithGlosses,
-  REVIEW_LINK_PATTERN,
 } from "../lib/markdownGlosses";
 import { isValidElement, useMemo, useState, type ReactNode } from "react";
 import { Platform, Share, StyleSheet, useWindowDimensions, View } from "react-native";
@@ -191,12 +189,11 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   // Glossed words a tap has opened, by occurrence: each shows its gloss until tapped again.
   const [openGlosses, setOpenGlosses] = useState<ReadonlySet<number>>(() => new Set());
   const glossed = hasGlossLinks(markdown);
-  const { onGlossOpen, onReviewOpen } = props;
-  const reviewWedge = onReviewOpen !== undefined;
   const rendered = useMemo(
-    () => markdownWithGlosses(markdown, openGlosses, { reviewWedge }),
-    [markdown, openGlosses, reviewWedge],
+    () => markdownWithGlosses(markdown, openGlosses),
+    [markdown, openGlosses],
   );
+  const { onGlossOpen } = props;
   const toggleGloss = (url: string) => {
     const gloss = glossOf(url);
     if (!gloss) return;
@@ -213,12 +210,8 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   };
   const [parsedLinkUrls, setParsedLinkUrls] = useState<ReadonlyArray<string>>([]);
   const onLinksChange = (links: MarkdownLinkOccurrence[]) => {
-    // Glosses and their wedges take no link pill, icon or menu of their own.
-    const urls = [
-      ...new Set(
-        links.map((link) => link.url).filter((url) => !isGlossHref(url) && !isReviewHref(url)),
-      ),
-    ];
+    // Glosses take no pill, icon or link menu.
+    const urls = [...new Set(links.map((link) => link.url).filter((url) => !isGlossHref(url)))];
     setParsedLinkUrls((previous) =>
       previous.length === urls.length && previous.every((url, index) => url === urls[index])
         ? previous
@@ -248,11 +241,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   const onLinkPress = (url: string) =>
     isGlossHref(url)
       ? toggleGloss(url)
-      : isReviewHref(url)
-        ? onReviewOpen?.()
-        : (fileHrefs.has(url) ? (props.onImagePress ?? props.onLinkPress) : props.onLinkPress)?.(
-            url,
-          );
+      : (fileHrefs.has(url) ? (props.onImagePress ?? props.onLinkPress) : props.onLinkPress)?.(url);
   const performMenuAction = (url: string, actionId: string) => {
     if (actionId === "enriched-open-link") onLinkPress(url);
     else if (actionId === "enriched-copy-link") copyTextWithHaptic(url);
@@ -318,20 +307,6 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
       linkVariants: {
         ...linkVariants,
         [GLOSS_LINK_PATTERN]: { color: props.textStyle.color, underline: true },
-        // The wedge: a padded pill, so a fingertip finds it at the end of the gloss.
-        [REVIEW_LINK_PATTERN]: {
-          color: props.textStyle.linkColor,
-          underline: false,
-          backgroundColor: "transparent",
-          fontFamily: props.textStyle.boldFontFamily,
-          pill: {
-            borderColor: "transparent",
-            borderWidth: 0,
-            borderRadius: 6,
-            paddingHorizontal: 10,
-            paddingVertical: 4,
-          },
-        },
       },
     };
   }, [props.textStyle, props.textAlign, themeAppearance, fontScale, linkVariants]);
@@ -353,7 +328,6 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
       Platform.OS === "android" && props.fileContextMenu
         ? ({ url }: { url: string }) => {
             if (isGlossHref(url)) return toggleGloss(url);
-            if (isReviewHref(url)) return onReviewOpen?.();
             const menu = props.fileContextMenu?.(url) ?? {
               title: url,
               actions: [

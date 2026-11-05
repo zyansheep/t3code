@@ -70,8 +70,6 @@ export interface SelectableMarkdownTextProps {
   readonly onLinkPress?: (href: string) => void;
   /** A tap opened the gloss of this word (closing one is not reported). */
   readonly onGlossOpen?: (word: string) => void;
-  /** The wedge at the end of an opened gloss was tapped; without it, opened glosses show no wedge. */
-  readonly onReviewOpen?: () => void;
   readonly fileContextMenu?: (href: string) => MarkdownFileContextMenu | undefined;
   readonly onFileContextMenuAction?: (href: string, actionId: string) => void;
   readonly linkCustomization?: (href: string) => MarkdownLinkCustomization | undefined;
