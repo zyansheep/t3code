@@ -131,12 +131,19 @@ export const AnnotationInteractionsReportInput = Schema.Struct({
 export type AnnotationInteractionsReportInput = typeof AnnotationInteractionsReportInput.Type;
 
 /**
- * A report with review items the collector did not store: `retryable` when it could not be reached or failed, so the
- * same items (same uids) can be sent again; not when it rejected one, which a resend would not change.
+ * A report with review items the collector did not store. `retryable`: it could not be reached or failed, so the whole
+ * batch can be sent again under the same uids. Otherwise `rejected` names the review items it refused, by index in
+ * `items`, with its reason; those are final, and every other item was stored.
  */
 export class AnnotationReportError extends Schema.TaggedError<AnnotationReportError>()(
   "AnnotationReportError",
-  { detail: Schema.String, retryable: Schema.Boolean },
+  {
+    detail: Schema.String,
+    retryable: Schema.Boolean,
+    rejected: Schema.optional(
+      Schema.Array(Schema.Struct({ item: Schema.Int, error: Schema.String })),
+    ),
+  },
 ) {
   override get message(): string {
     return this.detail;
