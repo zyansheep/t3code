@@ -1,3 +1,4 @@
+import type { EnvironmentId } from "@t3tools/contracts";
 import { AppBar } from "../../components/ui/AppBar";
 import { ScreenHeaderButton } from "../../components/ui/ScreenHeaderButton";
 import type { AppBarAction, AppBarMenu } from "../../components/ui/AppBar.types";
@@ -9,6 +10,7 @@ import {
   useThreadGitMenuDefinition,
   type ThreadGitControlsProps,
 } from "./ThreadGitControls";
+import { useChatJapaneseActions } from "./useChatJapaneseActions";
 
 export function ThreadHeader(props: {
   readonly title: string;
@@ -26,6 +28,7 @@ export function ThreadHeader(props: {
   const { panes, toggleAuxiliaryPane, composerKeyboardActive, startNewTask } =
     useAdaptiveWorkspaceLayout();
   const gitMenu = useThreadGitMenuDefinition(props.gitControls);
+  const japaneseActions = useChatJapaneseActions(props.gitControls.environmentId as EnvironmentId);
   const terminalMenu = threadTerminalMenu(props.gitControls);
   const filesVisible = props.inspectorMode === "files" && panes.auxiliaryPaneVisible;
   const inspectorVisible = props.inspectorMode !== null && panes.auxiliaryPaneVisible;
@@ -58,7 +61,7 @@ export function ThreadHeader(props: {
             }
           : undefined
       }
-      actions={actions}
+      actions={[...actions, ...japaneseActions]}
       menus={menus}
       trailing={
         props.fileInspectorSupported && props.hasThreadCwd ? (
