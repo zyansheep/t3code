@@ -324,6 +324,23 @@ describe("nextAnnotationReview", () => {
     }),
   );
 
+  it.effect("passes a counts-only peek on, for a badge", () =>
+    Effect.gen(function* () {
+      const counts = { new: 12, learning: 3, review: 40 };
+      const { requests, run } = reviewWith(
+        configured,
+        { status: 200, body: { ok: true, card: null, counts } },
+        { source: "desktop", exclude: [], peek: true },
+      );
+      assert.deepStrictEqual(yield* run, { card: null, counts });
+      assert.deepStrictEqual(JSON.parse(requests[0]!.body), {
+        source: "desktop",
+        exclude: [],
+        peek: true,
+      });
+    }),
+  );
+
   it.effect("fails as not configured without a collector, sending nothing", () =>
     Effect.gen(function* () {
       const { requests, run } = reviewWith({}, { status: 200, body: { ok: true, card: null } });

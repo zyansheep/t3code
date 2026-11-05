@@ -170,6 +170,7 @@ export const nextAnnotationReview = Effect.fn("nextAnnotationReview")(
         source: input.source,
         exclude: input.exclude,
         ...(input.more === undefined ? {} : { more: input.more }),
+        ...(input.peek === undefined ? {} : { peek: input.peek }),
       }),
     );
     const response = yield* client.execute(request);
