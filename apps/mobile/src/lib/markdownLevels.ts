@@ -159,9 +159,23 @@ const THRESHOLD = /^(-2|-1|0|1|2|3)$/;
 const LEVEL_MARKUP = /\sdata-on=/i;
 // What may stand between a Japanese twin and its English one: whitespace within a block.
 const BETWEEN_TWINS = /^\s*$/;
-// The Japanese an unclosed word's text starts with, as the desktop takes it: Han, Hiragana and Katakana by script
-// extension, the long-vowel mark included.
-const WORD_RUN = /^[\p{scx=Han}\p{scx=Hira}\p{scx=Kana}]+/u;
+// Han, Hiragana and Katakana by script extension, as the desktop's pattern has them, written out as code points:
+// Hermes may not know script properties, and a pattern it can't compile would break chat on load. Kanji and their
+// extensions, kana, the long-vowel and iteration marks, and the CJK punctuation they share.
+const JAPANESE_SCRIPT = [
+  "\\u00B7\\u0305\\u0323\\u2E80-\\u2E99\\u2E9B-\\u2EF3\\u2F00-\\u2FD5\\u2FF0-\\u2FFF\\u3001-\\u3003",
+  "\\u3005-\\u3011\\u3013-\\u301F\\u3021-\\u302D\\u3030-\\u3035\\u3037-\\u303F\\u3041-\\u3096",
+  "\\u3099-\\u30FF\\u3190-\\u319F\\u31C0-\\u31E5\\u31EF-\\u31FF\\u3220-\\u3247\\u3280-\\u32B0",
+  "\\u32C0-\\u32CB\\u32D0-\\u3370\\u337B-\\u337F\\u33E0-\\u33FE\\u3400-\\u4DBF\\u4E00-\\u9FFF",
+  "\\uA700-\\uA707\\uF900-\\uFA6D\\uFA70-\\uFAD9\\uFE45-\\uFE46\\uFF61-\\uFF9F\\u{16FE2}-\\u{16FE3}",
+  "\\u{16FF0}-\\u{16FF6}\\u{1AFF0}-\\u{1AFF3}\\u{1AFF5}-\\u{1AFFB}\\u{1AFFD}-\\u{1AFFE}",
+  "\\u{1B000}-\\u{1B122}\\u{1B132}\\u{1B150}-\\u{1B152}\\u{1B155}\\u{1B164}-\\u{1B167}",
+  "\\u{1D360}-\\u{1D371}\\u{1F200}\\u{1F250}-\\u{1F251}\\u{20000}-\\u{2A6DF}\\u{2A700}-\\u{2B81D}",
+  "\\u{2B820}-\\u{2CEAD}\\u{2CEB0}-\\u{2EBE0}\\u{2EBF0}-\\u{2EE5D}\\u{2F800}-\\u{2FA1D}",
+  "\\u{30000}-\\u{3134A}\\u{31350}-\\u{33479}",
+].join("");
+// The Japanese an unclosed word's text starts with, as the desktop takes it.
+const WORD_RUN = new RegExp(`^[${JAPANESE_SCRIPT}]+`, "u");
 const BLANK_LINE = /\n[ \t]*\r?\n/;
 // An `<abbr>` or `<span>` tag at the end of a message still streaming in, at any point before its `>`; a quoted
 // attribute value may hold a `>`.
