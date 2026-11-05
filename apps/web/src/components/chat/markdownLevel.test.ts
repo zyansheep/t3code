@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import { createMarkdownRenderer } from "./markdownRenderer";
-import { rehypeChatLevel } from "./markdownLevel";
+import { rehypeChatLevel } from "@t3tools/shared/markdownLevel";
 
 const renderer = (rehypePlugins: Parameters<typeof createMarkdownRenderer>[0]["rehypePlugins"]) =>
   createMarkdownRenderer({

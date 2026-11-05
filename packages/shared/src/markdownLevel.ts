@@ -224,7 +224,7 @@ function renderAt(tree: HastNode, level: number, source: string) {
   withChildren(tree);
 }
 
-interface ChatLevel {
+export interface ChatLevel {
   /** The chat level, from -3 (no Japanese) to 3. */
   readonly level: number;
   /** English only, which also turns glosses in messages without levels into English. */
