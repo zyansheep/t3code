@@ -21,6 +21,8 @@ export function WorkspaceListToolbarRow(props: {
   readonly onOpenEnvironments: () => void;
   /** Stays trailing while searching, so it never moves and still narrows the results. */
   readonly filter: ReactNode;
+  /** Before search, and hidden while searching. */
+  readonly actions?: ReactNode;
 }) {
   const { height } = useToolbarLayout();
   return (
@@ -50,6 +52,7 @@ export function WorkspaceListToolbarRow(props: {
               }
             />
           </View>
+          {props.actions}
           <AndroidHeaderIconButton
             accessibilityLabel={props.searchAccessibilityLabel}
             icon="magnifyingglass"

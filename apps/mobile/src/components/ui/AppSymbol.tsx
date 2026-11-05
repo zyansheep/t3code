@@ -7,6 +7,7 @@ import IconAlertTriangle from "@tabler/icons-react-native/IconAlertTriangle";
 import IconApps from "@tabler/icons-react-native/IconApps";
 import IconArchive from "@tabler/icons-react-native/IconArchive";
 import IconCalendarClock from "@tabler/icons-react-native/IconCalendarClock";
+import IconCards from "@tabler/icons-react-native/IconCards";
 import IconArrowBackUp from "@tabler/icons-react-native/IconArrowBackUp";
 import IconArrowDown from "@tabler/icons-react-native/IconArrowDown";
 import IconArrowForwardUp from "@tabler/icons-react-native/IconArrowForwardUp";
@@ -239,6 +240,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "person.badge.plus": IconUserPlus,
   photo: IconPhoto,
   pin: IconPin,
+  "rectangle.stack": IconCards,
   "pin.slash": IconPinnedOff,
   play: IconPlayerPlay,
   pause: IconPlayerPause,

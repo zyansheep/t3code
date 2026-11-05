@@ -18,6 +18,7 @@ import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands
 import { WorkspaceListToolbarRow } from "../workspace/WorkspaceListToolbarRow";
 import { useWorkspaceConnectionState } from "../../state/workspace";
 import { useToolbarLayout } from "../../components/ui/useToolbarLayout";
+import { WordReviewButton } from "../word-review/WordReviewButton";
 
 export function ThreadListToolbar(props: {
   readonly searchQuery: string;
@@ -115,6 +116,7 @@ export function ThreadListToolbar(props: {
         titleAccessibilityLabel="T3 Code, Threads"
         onOpenEnvironments={props.onOpenEnvironments}
         filter={filterButton}
+        actions={<WordReviewButton />}
       />
     </View>
   );
