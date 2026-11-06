@@ -97,6 +97,8 @@ interface Watched {
   expiry: ReturnType<typeof setTimeout> | null;
   /** Presses (level steps and English only) sent so far, so a read that started before one is not kept. */
   presses: number;
+  retry: ReturnType<typeof setTimeout> | null;
+  failures: number;
 }
 
 const watched = new Map<EnvironmentId, Watched>();
@@ -104,7 +106,15 @@ const watched = new Map<EnvironmentId, Watched>();
 function entry(environmentId: EnvironmentId): Watched {
   let watch = watched.get(environmentId);
   if (!watch) {
-    watch = { settled: false, inFlight: false, attemptedAt: 0, expiry: null, presses: 0 };
+    watch = {
+      settled: false,
+      inFlight: false,
+      attemptedAt: 0,
+      expiry: null,
+      presses: 0,
+      retry: null,
+      failures: 0,
+    };
     watched.set(environmentId, watch);
   }
   return watch;
@@ -184,6 +194,15 @@ export async function refreshAnnotationStatus(environmentId: EnvironmentId): Pro
   } else if (failureReason(result) === "not configured") {
     watch.settled = true;
     setStatus(environmentId, null);
+  } else if (!watch.settled && !watch.retry) {
+    // A first read can fail while the server is still connecting; without a retry here the status (and the review
+    // button) would wait for the next focus or the 5-minute refresh. Backs off to that refresh's interval.
+    const delay = Math.min(RETRY_MS * 2 ** watch.failures, REFRESH_MS);
+    watch.failures += 1;
+    watch.retry = setTimeout(() => {
+      watch.retry = null;
+      void refreshAnnotationStatus(environmentId);
+    }, delay);
   }
 }
 
