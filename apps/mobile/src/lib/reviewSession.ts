@@ -4,12 +4,15 @@
  * card due again within minutes can come back and the counts are current; on screen they drop at each grade meanwhile.
  */
 import type {
-  AnnotationInteraction,
+  AnnotationQueuedInteraction,
   AnnotationReviewCard,
   AnnotationReviewNextResult,
 } from "@t3tools/contracts";
 
-export type AnnotationReviewItem = Extract<AnnotationInteraction, { readonly kind: "review" }>;
+export type AnnotationReviewItem = Extract<
+  AnnotationQueuedInteraction,
+  { readonly kind: "review" }
+>;
 export type ReviewGrade = NonNullable<AnnotationReviewItem["grade"]>;
 export type ReviewCounts = NonNullable<AnnotationReviewNextResult["counts"]>;
 type ReviewQueue = NonNullable<AnnotationReviewCard["queue"]>;
