@@ -3,7 +3,7 @@ import {
   runAtomCommand,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { AnnotationInteraction, type EnvironmentId, WS_METHODS } from "@t3tools/contracts";
+import { AnnotationQueuedInteraction, type EnvironmentId, WS_METHODS } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 
@@ -44,7 +44,7 @@ async function queueFile() {
  */
 async function send(
   environmentId: string,
-  items: ReadonlyArray<AnnotationInteraction>,
+  items: ReadonlyArray<AnnotationQueuedInteraction>,
 ): Promise<GlossOpenSendResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<false>((resolve) => {
@@ -73,7 +73,7 @@ const queue = createGlossOpenQueue({
   save: async (entries: ReadonlyArray<QueuedGlossOpen>) =>
     writeFileAtomically(await queueFile(), JSON.stringify(entries)),
   send,
-  isItem: Schema.is(AnnotationInteraction),
+  isItem: Schema.is(AnnotationQueuedInteraction),
   now: () => Date.now(),
 });
 
@@ -178,7 +178,7 @@ export function reportGlossOpen(input: {
  */
 export function reportAnnotationReview(
   environmentId: EnvironmentId,
-  item: Extract<AnnotationInteraction, { readonly kind: "review" }>,
+  item: Extract<AnnotationQueuedInteraction, { readonly kind: "review" }>,
 ): Promise<boolean> {
   try {
     const uid = item.uid;
