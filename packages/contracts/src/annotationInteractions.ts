@@ -35,7 +35,7 @@ const AnnotationPlace = {
  * One opened `<abbr>` popover in a chat message: which annotation, how it opened (`peek`: hover, `pin`: click, tap or
  * Enter), when and for how long. Text and positions only, never the message itself.
  */
-const AnnotationOpen = Schema.Struct({
+export const AnnotationOpen = Schema.Struct({
   ...AnnotationPlace,
   kind: Schema.Literals(["peek", "pin"]),
   word: AnnotationText,
@@ -44,6 +44,7 @@ const AnnotationOpen = Schema.Struct({
   /** Client id, so a report sent twice (the phone's queue retries) is stored once. */
   uid: Schema.optional(AnnotationId),
 });
+export type AnnotationOpen = typeof AnnotationOpen.Type;
 
 /**
  * Where the reader was in a message with annotations, by position only: a click (`target`: link or control, or text), a
@@ -131,11 +132,16 @@ export const AnnotationInteraction = Schema.Union([
 export type AnnotationInteraction = typeof AnnotationInteraction.Type;
 export type AnnotationReading = Exclude<
   AnnotationInteraction,
-  typeof AnnotationOpen.Type | typeof AnnotationReview.Type
+  AnnotationOpen | typeof AnnotationReview.Type
 >;
+/** The items a client keeps until stored and resends under their `uid`: opens and review cards (all the phone sends). */
+export const AnnotationQueuedInteraction = Schema.Union([AnnotationOpen, AnnotationReview]);
+export type AnnotationQueuedInteraction = typeof AnnotationQueuedInteraction.Type;
+
+export const ANNOTATION_REPORT_MAX_ITEMS = 50;
 
 export const AnnotationInteractionsReportInput = Schema.Struct({
-  items: Schema.Array(AnnotationInteraction).check(Schema.isMaxLength(50)),
+  items: Schema.Array(AnnotationInteraction).check(Schema.isMaxLength(ANNOTATION_REPORT_MAX_ITEMS)),
 });
 export type AnnotationInteractionsReportInput = typeof AnnotationInteractionsReportInput.Type;
 
