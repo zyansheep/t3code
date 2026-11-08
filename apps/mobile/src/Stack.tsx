@@ -713,7 +713,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     // The environment is the one whose server has the collector, so the route is opened from the app, not a link.
     WordReview: createNativeStackScreen({
       screen: WordReviewScreen,
-      options: { ...DETAIL_HEADER_OPTIONS, title: "Review" },
+      options: pageRoute({ title: "Review" }),
     }),
     SettingsLegal: createNativeStackScreen({
       screen: SettingsLegalRouteScreen,
