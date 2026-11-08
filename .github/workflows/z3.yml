@@ -2,18 +2,21 @@ name: Z3 Code
 
 # Z3 Code, the fork, released for every device at once: the Linux x64 AppImage, the linux-x64 `t3`
 # CLI and the Android APK, built from the same source and published as one release, so the desktop
-# app, the servers and the phone all speak the same protocol. Builds follow upstream's stable
-# releases only (published after upstream's own CI passes): protocol bumps land there.
+# app, the servers and the phone all speak the same protocol. Builds follow upstream's nightly
+# releases (vX.Y.Z-nightly.YYYYMMDD.B), so the phone's newer screens build on the same base as
+# the desktop.
 #
-# Each run replays the commits on z3 onto the newest upstream stable tag, runs check:changed
+# Each run replays the commits on z3 onto the newest upstream nightly tag, runs check:changed
 # against that tag (format, lint, knip, typecheck of the affected packages, and the tests beside
-# our changes), builds the three assets, and publishes them as vX.Y.Z-z3.N: X.Y.Z is the upstream
-# base and N counts our releases on it. The tag points at the z3 commit that was replayed.
+# our changes), builds the three assets, and publishes them as <nightly>-z3.N: N counts our
+# releases on that nightly. The tag points at the z3 commit that was replayed. The desktop app
+# still reads such a version as Beta (its nightly pattern ends at the build number), so its name
+# and data directory stay those of the stable-based releases.
 #
 # CI never pushes z3: GITHUB_TOKEN may not push commits that touch workflow files, and z3 stays
 # whatever was last pushed by hand. When the replay conflicts, the run fails and says so; rebase
 # by hand, then push, which starts a run:
-#   git fetch upstream --tags && git rebase vX.Y.Z z3   # resolve, vp run check:changed vX.Y.Z
+#   git fetch upstream --tags && git rebase <nightly tag> z3   # resolve, vp run check:changed <tag>
 #   git push --force-with-lease origin z3
 #
 # The APK installs beside the official app under its own id, signed with the fork's key; it has
@@ -28,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: Release again even when this upstream stable and z3 commit are released
+        description: Release again even when this upstream nightly and z3 commit are released
         type: boolean
         default: false
 
@@ -45,7 +48,7 @@ env:
 
 jobs:
   prepare:
-    name: Replay z3 onto upstream stable
+    name: Replay z3 onto upstream nightly
     if: github.repository == 'zyansheep/t3code'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -64,12 +67,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FORCE: ${{ inputs.force }}
         run: |
-          base=$(gh api repos/pingdotgg/t3code/releases/latest -q .tag_name)
-          [[ "$base" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || {
-            echo "::error::upstream's latest release is '$base', not a stable vX.Y.Z tag"
+          base=$(gh release list -R pingdotgg/t3code --limit 40 --json tagName \
+            -q '[.[] | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-nightly\\.[0-9]{8}\\.[0-9]+$"))][0].tagName')
+          [[ "$base" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.([0-9]+)$ ]] || {
+            echo "::error::no upstream nightly release found (got '$base')"
             exit 1
           }
-          major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} patch=${BASH_REMATCH[3]}
+          build=${BASH_REMATCH[1]}
           if [ "$GITHUB_REF" = refs/heads/z3 ]; then
             source=$GITHUB_SHA
           else
@@ -84,8 +88,11 @@ jobs:
           last=$(sed -nE "s|.*refs/tags/$base-z3\.([0-9]+)$|\1|p" <<<"$released" | sort -n | tail -1)
           n=$(( ${last:-0} + 1 ))
           (( n < 1000 )) || { echo "::error::$base has 999 releases; versionCode has no room"; exit 1; }
-          # Android only installs a higher versionCode: base version, then N.
-          code=$(( ((major * 100 + minor) * 100 + patch) * 1000 + n ))
+          # Android only installs a higher versionCode: upstream's nightly build number, then N. Above
+          # every stable-based release's ((major * 100 + minor) * 100 + patch) * 1000 + N, and under
+          # Android's cap of 2100000000 until build 2100000.
+          code=$(( build * 1000 + n ))
+          (( code > 107002 && code < 2100000000 )) || { echo "::error::versionCode $code is out of range"; exit 1; }
           {
             echo "base=$base"
             echo "source=$source"
@@ -107,7 +114,7 @@ jobs:
             !/.repos/
           sparse-checkout-cone-mode: false
 
-      - name: Replay our commits onto the stable tag
+      - name: Replay our commits onto the nightly tag
         id: replay
         if: steps.release.outputs.skip != 'true'
         env:
@@ -181,7 +188,7 @@ jobs:
       - name: Install Chromium for browser tests
         run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
 
-      - name: Check our changes against the stable tag
+      - name: Check our changes against the nightly tag
         run: vp run check:changed "$BASE"
 
   desktop:
