@@ -2,7 +2,7 @@ import {
   AnnotationEnglishSetInput,
   AnnotationReportError,
   AnnotationInteractionsReportInput,
-  AnnotationInteraction,
+  AnnotationQueuedInteraction,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
@@ -19,7 +19,7 @@ import {
 } from "./glossOpens";
 
 const NOW = 1_800_000_000_000;
-const isItem = Schema.is(AnnotationInteraction);
+const isItem = Schema.is(AnnotationQueuedInteraction);
 const decodeReport = Schema.decodeUnknownSync(AnnotationInteractionsReportInput);
 const decodeEnglish = Schema.decodeUnknownSync(AnnotationEnglishSetInput);
 
@@ -35,7 +35,7 @@ function harness(options: {
   stored?: unknown;
   send?: (
     environmentId: string,
-    items: ReadonlyArray<AnnotationInteraction>,
+    items: ReadonlyArray<AnnotationQueuedInteraction>,
   ) => GlossOpenSendResult | Promise<GlossOpenSendResult>;
 }) {
   const sent: Array<{ environmentId: string; uids: Array<string | undefined> }> = [];

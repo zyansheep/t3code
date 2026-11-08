@@ -91,7 +91,7 @@ export function WordReviewScreen({
   };
   return (
     <View className="flex-1 bg-screen">
-      <AppBar title="Review" onBack={goBack} sidebar={false} />
+      <AppBar title="Review" onBack={goBack} />
       <WordReview key={route.params.environmentId} environmentId={route.params.environmentId} />
     </View>
   );

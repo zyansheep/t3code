@@ -4,7 +4,7 @@
  * that word, sent without a word count, which the collector then treats as an opened-only episode, never a message read.
  * The same queue carries the review screen's items (lib/reviewSession.ts).
  */
-import type { AnnotationInteraction, AnnotationOpen } from "@t3tools/contracts";
+import type { AnnotationQueuedInteraction, AnnotationOpen } from "@t3tools/contracts";
 import { ANNOTATION_REPORT_MAX_ITEMS, AnnotationReportError } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -84,7 +84,7 @@ export function glossOpenItem(input: {
 
 export interface QueuedGlossOpen {
   readonly environmentId: string;
-  readonly item: AnnotationInteraction;
+  readonly item: AnnotationQueuedInteraction;
 }
 
 /**
@@ -111,9 +111,9 @@ export interface GlossOpenQueueOptions {
   /** Sends one batch to one environment. */
   readonly send: (
     environmentId: string,
-    items: ReadonlyArray<AnnotationInteraction>,
+    items: ReadonlyArray<AnnotationQueuedInteraction>,
   ) => Promise<GlossOpenSendResult>;
-  readonly isItem: (value: unknown) => value is AnnotationInteraction;
+  readonly isItem: (value: unknown) => value is AnnotationQueuedInteraction;
   readonly now: () => number;
 }
 
@@ -175,7 +175,10 @@ export function createGlossOpenQueue(options: GlossOpenQueueOptions) {
   })();
 
   /** The batch has left the queue: its items were stored, but for those the server refused for good. */
-  const remove = (batch: ReadonlyArray<AnnotationInteraction>, refused: ReadonlySet<number>) => {
+  const remove = (
+    batch: ReadonlyArray<AnnotationQueuedInteraction>,
+    refused: ReadonlySet<number>,
+  ) => {
     const gone = new Set(batch.map((item) => item.uid));
     entries = entries.filter((entry) => !gone.has(entry.item.uid));
     settle(
