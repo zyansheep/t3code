@@ -117,9 +117,12 @@ vi.mock(import("../state/annotationStatus"), async (original) => ({
   watchAnnotationStatus: () => {},
 }));
 // The client's own server, which forwards annotation reports, rather than the one hosting the chat.
-vi.mock(import("../state/primaryEnvironment"), async () => {
+vi.mock(import("../state/primaryEnvironment"), async (original) => {
   const { Atom } = await import("effect/reactivity");
-  return { primaryEnvironmentIdAtom: Atom.make<string | null>(null) as never };
+  return {
+    ...(await original()),
+    primaryEnvironmentIdAtom: Atom.make<string | null>(null) as never,
+  };
 });
 vi.mock(import("../remoteOpen"), async (original) => ({
   ...(await original()),
