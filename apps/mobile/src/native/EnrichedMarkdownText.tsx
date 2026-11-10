@@ -22,7 +22,7 @@ import {
   markdownWithGlosses,
 } from "../lib/markdownGlosses";
 import { markdownAtLevel, markdownEnglishOnly, withoutPartialTag } from "../lib/markdownLevels";
-import { isTintHref, tintLinkVariants } from "../lib/markdownTint";
+import { tintLinkVariants } from "../lib/markdownTint";
 import { isValidElement, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { Platform, Share, StyleSheet, useWindowDimensions, View } from "react-native";
 import {
@@ -283,7 +283,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     [gt],
   );
   const { englishOnly, japaneseLevel, japaneseSentenceLevel, streaming } = props;
-  // Only leveled Japanese has a tint, never in English only.
+  // Only leveled Japanese has a tint, never in English only; on the phone only its glossed words (lib/markdownTint.ts).
   const tinted = chatJapaneseTintEnabled === true && japaneseLevel !== undefined && !englishOnly;
   const { markdown, fileHrefs } = useMemo(() => {
     // The level picks from the message as written, whose attributes markdownWithHtml drops.
@@ -295,7 +295,6 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
           : props.markdown
         : markdownAtLevel(props.markdown, japaneseLevel, streaming, {
             sentenceLevel: japaneseSentenceLevel,
-            tint: tinted,
           });
     const shown = englishOnly ? markdownEnglishOnly : (content: string) => content;
     if (!fileEmbedLabel) {
@@ -321,7 +320,6 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     englishOnly,
     japaneseLevel,
     japaneseSentenceLevel,
-    tinted,
     streaming,
   ]);
   // Glossed words a tap has opened, by occurrence: each shows its gloss until tapped again. Occurrences are numbered
@@ -354,12 +352,8 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   };
   const [parsedLinkUrls, setParsedLinkUrls] = useState<ReadonlyArray<string>>([]);
   const onLinksChange = (links: MarkdownLinkOccurrence[]) => {
-    // Glosses and tinted sentences take no pill, icon or link menu.
-    const urls = [
-      ...new Set(
-        links.map((link) => link.url).filter((url) => !isGlossHref(url) && !isTintHref(url)),
-      ),
-    ];
+    // Glosses take no pill, icon or link menu.
+    const urls = [...new Set(links.map((link) => link.url).filter((url) => !isGlossHref(url)))];
     setParsedLinkUrls((previous) =>
       previous.length === urls.length && previous.every((url, index) => url === urls[index])
         ? previous
@@ -390,7 +384,6 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   } | null>(null);
   const { fileContextMenu, onFileContextMenuAction } = props;
   const onLinkPress = (url: string) => {
-    if (isTintHref(url)) return;
     if (isGlossHref(url)) return toggleGloss(url);
     const model = enrichedModelReference(url, props.models);
     if (model) {
@@ -518,7 +511,6 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     const onLinkLongPress =
       Platform.OS === "android" && props.fileContextMenu
         ? ({ url }: { url: string }) => {
-            if (isTintHref(url)) return;
             if (isGlossHref(url)) return toggleGloss(url);
             const menu = modelContextMenu(url) ??
               props.fileContextMenu?.(url) ?? {
