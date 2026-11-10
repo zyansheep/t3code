@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { minuteTick } from "@t3tools/client-runtime/clock";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { AnnotationIntensity, EnvironmentId } from "@t3tools/contracts";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import type { AppBarAction } from "../../components/ui/AppBar.types";
@@ -12,6 +12,7 @@ import {
   watchAnnotationStatus,
 } from "../../state/chat-japanese";
 import { annotationStatusAtom } from "../../state/chat-japanese-view";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
 const LEVEL_NAMES = new Map([
   [-3, "off"],
@@ -38,14 +39,29 @@ function durationLabel(ms: number): string {
   return `${hours} h ${rest} min`;
 }
 
+// A level that ended reads as normal until the next refresh brings the collector's.
+const levelNow = (dial: AnnotationIntensity, now: number) =>
+  dial.until > 0 && dial.until <= now ? 0 : dial.level;
+
+/** A dial's line in the menu: its level now, and its time left. */
+function levelLine(dial: AnnotationIntensity, now: number): string {
+  const level = levelNow(dial, now);
+  return `Now ${LEVEL_NAMES.get(level) ?? "normal"}${
+    level !== 0 && dial.until > now ? `, ${durationLabel(dial.until - now)} left` : ""
+  }`;
+}
+
 /**
- * The thread menu's chat Japanese, as the desktop's thread details have it: English only, and the level with a step
- * lighter and a step heavier. Nothing while the thread's server has no collector.
+ * The thread menu's chat Japanese, as the desktop's thread details have it: English only; the word level and, from a
+ * collector with one, the sentence level, each with a step lighter and a step heavier; and this phone's difficulty
+ * tint. Nothing while the thread's server has no collector.
  */
 export function useChatJapaneseActions(environmentId: EnvironmentId): ReadonlyArray<AppBarAction> {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the collector's chat Japanese status through this server, which the menu shows and English only renders
   useEffect(() => watchAnnotationStatus(environmentId), [environmentId]);
   const status = useAtomValue(annotationStatusAtom(environmentId));
+  const { chatJapaneseTintEnabled: tinted, setChatJapaneseTintEnabled } =
+    useAppearancePreferences();
   // Only a menu with times in it follows the clock.
   const minute = useSyncExternalStore(
     status === null ? subscribeNever : minuteTick.subscribe,
@@ -56,12 +72,7 @@ export function useChatJapaneseActions(environmentId: EnvironmentId): ReadonlyAr
   if (status === null) return [];
 
   const now = minuteTickToEpochMs(minute);
-  const { english, intensity } = status;
-  // A level that ended reads as normal until the next refresh brings the collector's.
-  const level = intensity.until > 0 && intensity.until <= now ? 0 : intensity.level;
-  const levelLine = `Now ${LEVEL_NAMES.get(level) ?? "normal"}${
-    level !== 0 && intensity.until > now ? `, ${durationLabel(intensity.until - now)} left` : ""
-  }`;
+  const { english, intensity, sentences } = status;
   const run = (change: () => Promise<{ ok: boolean; reason?: string } | null>) => {
     setBusy(true);
     void change()
@@ -70,6 +81,17 @@ export function useChatJapaneseActions(environmentId: EnvironmentId): ReadonlyAr
       })
       .finally(() => setBusy(false));
   };
+  // A collector with one level for both has one dial, as before.
+  const dials: ReadonlyArray<{
+    readonly surface: "chat" | "sentences";
+    readonly noun: string;
+    readonly dial: AnnotationIntensity;
+  }> = [
+    { surface: "chat", noun: sentences ? "Japanese words" : "Japanese", dial: intensity },
+    ...(sentences
+      ? ([{ surface: "sentences", noun: "Japanese sentences", dial: sentences }] as const)
+      : []),
+  ];
 
   return [
     {
@@ -85,21 +107,35 @@ export function useChatJapaneseActions(environmentId: EnvironmentId): ReadonlyAr
       disabled: busy,
       onPress: () => run(() => setEnglishOnly(environmentId, !english.on)),
     },
+    ...dials.flatMap(({ surface, noun, dial }): AppBarAction[] => {
+      const subtitle = levelLine(dial, now);
+      const level = levelNow(dial, now);
+      return [
+        {
+          accessibilityLabel: `Lighter ${noun}`,
+          icon: "chevron.left",
+          overflowOnly: true,
+          subtitle,
+          disabled: busy || level <= LOWEST_STEPPED_LEVEL,
+          onPress: () => run(() => stepAnnotationLevel(environmentId, -1, surface)),
+        },
+        {
+          accessibilityLabel: `Heavier ${noun}`,
+          icon: "chevron.right",
+          overflowOnly: true,
+          subtitle,
+          disabled: busy || level >= HIGHEST_LEVEL,
+          onPress: () => run(() => stepAnnotationLevel(environmentId, 1, surface)),
+        },
+      ];
+    }),
     {
-      accessibilityLabel: "Lighter Japanese",
-      icon: "chevron.left",
+      accessibilityLabel: "Difficulty tint",
+      icon: "paintbrush",
       overflowOnly: true,
-      subtitle: levelLine,
-      disabled: busy || level <= LOWEST_STEPPED_LEVEL,
-      onPress: () => run(() => stepAnnotationLevel(environmentId, -1)),
-    },
-    {
-      accessibilityLabel: "Heavier Japanese",
-      icon: "chevron.right",
-      overflowOnly: true,
-      subtitle: levelLine,
-      disabled: busy || level >= HIGHEST_LEVEL,
-      onPress: () => run(() => stepAnnotationLevel(environmentId, 1)),
+      selected: tinted,
+      subtitle: tinted ? "On, on this phone" : "Off, on this phone",
+      onPress: () => setChatJapaneseTintEnabled(!tinted),
     },
   ];
 }
