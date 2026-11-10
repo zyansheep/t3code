@@ -18,7 +18,8 @@ const AnnotationLevel = Schema.Int.check(Schema.isBetween({ minimum: -3, maximum
 
 /**
  * Where a message sat and where every annotation in it sat relative to the message, as `[text, x, y]`. `level` is the
- * chat level the message was rendered at, for a message that carries its Japanese at every level.
+ * word level the message was rendered at, for a message that carries its Japanese at every level, and `sentenceLevel`
+ * its sentence level, absent when it equals `level`.
  */
 const AnnotationPlace = {
   at: Schema.Finite,
@@ -29,6 +30,7 @@ const AnnotationPlace = {
     Schema.isMaxLength(200),
   ),
   level: Schema.optional(AnnotationLevel),
+  sentenceLevel: Schema.optional(AnnotationLevel),
 };
 
 /**
@@ -92,8 +94,8 @@ const AnnotationTrace = Schema.Struct({
 });
 
 /**
- * A message's first time on screen in its view (at each level, for a message with levels), sent once with its `words`,
- * which opens are counted against.
+ * A message's first time on screen in its view (at each pair of word and sentence levels, for a message with levels),
+ * sent once with its `words`, which opens are counted against.
  */
 const AnnotationShown = Schema.Struct({
   ...AnnotationPlace,
@@ -165,9 +167,13 @@ export class AnnotationReportError extends Schema.TaggedError<AnnotationReportEr
   }
 }
 
-/** One press of a chat shortcut that makes annotated words heavier (`1`) or lighter (`-1`) for a while. */
+/**
+ * One press that makes chat Japanese heavier (`1`) or lighter (`-1`) for a while: its words (`chat`, the default) or
+ * its sentences (`sentences`).
+ */
 export const AnnotationIntensityAdjustInput = Schema.Struct({
   step: Schema.Literals([1, -1]),
+  surface: Schema.optional(Schema.Literals(["chat", "sentences"])),
 });
 export type AnnotationIntensityAdjustInput = typeof AnnotationIntensityAdjustInput.Type;
 
@@ -189,10 +195,14 @@ export const AnnotationEnglish = Schema.Struct({
 });
 export type AnnotationEnglish = typeof AnnotationEnglish.Type;
 
-/** The collector's chat level and English-only state, as the client shows and renders them. */
+/**
+ * The collector's chat levels and English-only state, as the client shows and renders them: `intensity` is the word
+ * level, `sentences` the sentence level, absent from a collector with one level for both.
+ */
 export const AnnotationStatus = Schema.Struct({
   intensity: AnnotationIntensity,
   english: AnnotationEnglish,
+  sentences: Schema.optional(AnnotationIntensity),
 });
 export type AnnotationStatus = typeof AnnotationStatus.Type;
 
