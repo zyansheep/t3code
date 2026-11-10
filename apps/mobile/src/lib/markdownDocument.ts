@@ -90,7 +90,7 @@ const ABBR_TAG = /^<\/?abbr[\s/>]/i;
 type AnchorState = { readonly pending: string[]; open: number };
 
 // Code spans keep their text; an odd trailing backslash would escape the closing "]".
-export function escapeLinkLabel(text: string): string {
+function escapeLinkLabel(text: string): string {
   return text
     .replace(/(`+)[\s\S]*?\1|\\*[[\]]/g, (match) =>
       match.startsWith("`") || match.length % 2 === 0
