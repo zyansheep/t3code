@@ -324,12 +324,10 @@ export interface ChatLevel {
 }
 
 /**
- * Renders a chat message at its levels. A swapped word (`<abbr data-on>`) stays a gloss at or above its threshold on
- * the word level and is its English (`data-en`, else its gloss's meaning) below it; a sentence's twins
- * (`<span data-jw="ja|en" data-on>`) show by the sentence level, as `renderAt` says. Markup without a valid `data-on`
- * (-2 to 3) renders as written, except that in English only glossed words show their meaning and glossed sentences
- * their translation, as plain text. Each Japanese element left on screen with a valid `data-p` gets its tint
- * (`data-tint`, see `markTints`).
+ * Renders a chat message at its levels: a swapped word (`<abbr data-on>`) by the word level, its gloss at or above its
+ * threshold and its English (`data-en`, else its gloss's meaning) below; twins (`<span data-jw data-on>`) by the
+ * sentence level, as `renderAt` says. Other markup renders as written, but in English only as plain English. What shows
+ * Japanese gets its tint (`markTints`).
  */
 export function rehypeChatLevel({
   level,
