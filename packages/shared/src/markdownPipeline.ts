@@ -200,6 +200,8 @@ function rehypePreserveAbbreviationTitles() {
 const IMAGE_SRC_PROTOCOLS = [...(defaultSchema.protocols?.src ?? []), "file", "t3-context"];
 // The lowest chat level (data-on) at which a glossed word or a sentence's Japanese twin (data-jw) shows.
 const LEVEL_THRESHOLD = /^(?:-2|-1|0|1|2|3)$/;
+// The predicted chance (data-p) a level word or twin is looked up, 0 to 1, which its tint shows.
+const LEVEL_PREDICTION = /^(?:0(?:\.\d{1,2})?|1(?:\.0{1,2})?)$/;
 
 // The sanitizer compares schemes case-sensitively, so lowercase accepted editor links first.
 function rehypeNormalizeLocalEditorLinks() {
@@ -240,12 +242,14 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
       "dataMarkdownTitle",
       "dataEn",
       ["dataOn", LEVEL_THRESHOLD],
+      ["dataP", LEVEL_PREDICTION],
       ["dataUnclosed", "end", "block"],
     ],
     span: [
       ...(defaultSchema.attributes?.span ?? []),
       ["dataJw", "ja", "en"],
       ["dataOn", LEVEL_THRESHOLD],
+      ["dataP", LEVEL_PREDICTION],
       ["dataUnclosed", "end", "block"],
       ["dataApart", ""],
     ],
