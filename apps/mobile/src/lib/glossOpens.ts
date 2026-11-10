@@ -49,8 +49,9 @@ export function glossOpenSession(nowMs: number, random: string): string {
 
 /**
  * The report of one word tapped open, or null when the collector would not take the word (as the desktop skips it).
- * It carries `level`, the chat level its message was rendered at (lib/markdownLevels.ts), when that is one the contract
- * takes, -3 to 3: one item the server can't decode would fail its whole batch.
+ * It carries `level`, the word level its message was rendered at (lib/markdownLevels.ts), when that is one the contract
+ * takes, -3 to 3 (one item the server can't decode would fail its whole batch), and `sentenceLevel`, the sentence level,
+ * when that is one too and differs from it.
  */
 // One view per word: a context keeps only its latest list, so a growing list would make later words look unopened
 // in an earlier episode. A tap counts whatever its length and may never be closed, so dwellMs stays 0.
@@ -61,12 +62,16 @@ export function glossOpenItem(input: {
   readonly word: string;
   readonly at: number;
   readonly level?: number | undefined;
+  readonly sentenceLevel?: number | undefined;
 }): AnnotationOpen | null {
   const word = input.word.trim();
   if (word.length === 0 || word.length > WORD_MAX_LENGTH) return null;
-  const { level } = input;
-  const rendered =
-    level !== undefined && Number.isInteger(level) && level >= -3 && level <= 3 ? { level } : {};
+  const { level, sentenceLevel } = input;
+  const rendered = !isLevel(level)
+    ? {}
+    : isLevel(sentenceLevel) && sentenceLevel !== level
+      ? { level, sentenceLevel }
+      : { level };
   return {
     kind: "pin",
     word,
@@ -81,6 +86,9 @@ export function glossOpenItem(input: {
     uid: `phone-${input.session}-${input.sequence}`,
   };
 }
+
+const isLevel = (level: number | undefined): level is number =>
+  level !== undefined && Number.isInteger(level) && level >= -3 && level <= 3;
 
 export interface QueuedGlossOpen {
   readonly environmentId: string;

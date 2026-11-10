@@ -89,7 +89,7 @@ const ABBR_TAG = /^<\/?abbr[\s/>]/i;
 type AnchorState = { readonly pending: string[]; open: number };
 
 // Code spans keep their text; an odd trailing backslash would escape the closing "]".
-function escapeLinkLabel(text: string): string {
+export function escapeLinkLabel(text: string): string {
   return text
     .replace(/(`+)[\s\S]*?\1|\\*[[\]]/g, (match) =>
       match.startsWith("`") || match.length % 2 === 0
@@ -121,7 +121,7 @@ function anchorMarkdown(tags: readonly string[], glosses = true): AnchorState {
     if (tag[1] !== "/") {
       const href = gloss
         ? glosses
-          ? glossHref(attribute(tag, "title"))
+          ? glossHref(attribute(tag, "title"), attribute(tag, "data-p"))
           : undefined
         : attribute(tag, "href")?.trim();
       open.push({
