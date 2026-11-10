@@ -1,4 +1,9 @@
-import { type AnnotationEnglish, AnnotationStatus, type EnvironmentId } from "@t3tools/contracts";
+import {
+  type AnnotationEnglish,
+  type AnnotationIntensity,
+  AnnotationStatus,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -46,8 +51,8 @@ export const annotationStatusKnownAtom = Atom.family((environmentId: Environment
 );
 
 /**
- * The level chat messages render at, from -3 (no Japanese) to 3: English only renders as -3. Until the server's status
- * is known, the last one this browser stored for it, else normal. A number, so only a change re-renders messages.
+ * The word level chat messages render at, from -3 (no Japanese) to 3: English only renders as -3. Until the server's
+ * status is known, the last one this browser stored for it, else normal. A number, so only a change re-renders messages.
  */
 export const chatLevelAtom = Atom.family((environmentId: EnvironmentId | null) =>
   Atom.make((get) => {
@@ -57,6 +62,47 @@ export const chatLevelAtom = Atom.family((environmentId: EnvironmentId | null) =
     return status === null ? 0 : status.english.on ? -3 : status.intensity.level;
   }).pipe(Atom.withLabel("annotation-level")),
 );
+
+/**
+ * The sentence level chat messages render their twins at, as `chatLevelAtom` reads the word level; a collector with
+ * one level for both has no sentence level, and twins follow the word level.
+ */
+export const sentenceLevelAtom = Atom.family((environmentId: EnvironmentId | null) =>
+  Atom.make((get) => {
+    if (environmentId === null) return 0;
+    const status =
+      get(annotationStatusAtom(environmentId)) ?? storedStatus(environmentId, Date.now());
+    if (status === null) return 0;
+    return status.english.on ? -3 : (status.sentences ?? status.intensity).level;
+  }).pipe(Atom.withLabel("annotation-sentence-level")),
+);
+
+const TINT_STORAGE_KEY = "t3.japaneseTint";
+
+/** Whether this browser tints chat Japanese by how hard it is predicted to be; on unless turned off here. */
+export const japaneseTintAtom = Atom.make(storedTint()).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("annotation-tint"),
+);
+
+function storedTint(): boolean {
+  try {
+    return storage()?.getItem(TINT_STORAGE_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+/** Turns the tint on or off in this browser; reports are the same either way. */
+export function setJapaneseTint(on: boolean): void {
+  appAtomRegistry.set(japaneseTintAtom, on);
+  try {
+    if (on) storage()?.removeItem(TINT_STORAGE_KEY);
+    else storage()?.setItem(TINT_STORAGE_KEY, "off");
+  } catch {
+    // A full or blocked storage only forgets the choice at the next start.
+  }
+}
 
 const STORAGE_KEY_PREFIX = "t3.annotationStatus:";
 const decodeStored = Schema.decodeUnknownOption(Schema.fromJsonString(AnnotationStatus));
@@ -120,18 +166,19 @@ function entry(environmentId: EnvironmentId): Watched {
   return watch;
 }
 
-/** The status as the collector would answer at `now`: English only and the level end when their time is up. */
+const levelAt = (level: AnnotationIntensity, now: number): AnnotationIntensity =>
+  level.level !== 0 && level.until > 0 && level.until <= now ? { level: 0, until: 0 } : level;
+
+/** The status as the collector would answer at `now`: English only and each level end when their time is up. */
 function statusAt(status: AnnotationStatus, now: number): AnnotationStatus {
-  const { english, intensity } = status;
+  const { english, intensity, sentences } = status;
   return {
     english:
       english.on && english.until > 0 && english.until <= now
         ? { on: false, until: 0, at: english.at }
         : english,
-    intensity:
-      intensity.level !== 0 && intensity.until > 0 && intensity.until <= now
-        ? { level: 0, until: 0 }
-        : intensity,
+    intensity: levelAt(intensity, now),
+    ...(sentences === undefined ? {} : { sentences: levelAt(sentences, now) }),
   };
 }
 
@@ -146,9 +193,11 @@ function setStatus(environmentId: EnvironmentId, status: AnnotationStatus | null
   const now = Date.now();
   const current = status && statusAt(status, now);
   const ends = current
-    ? [current.english.on ? current.english.until : 0, current.intensity.until].filter(
-        (until) => until > now,
-      )
+    ? [
+        current.english.on ? current.english.until : 0,
+        current.intensity.until,
+        current.sentences?.until ?? 0,
+      ].filter((until) => until > now)
     : [];
   if (ends.length > 0) {
     watch.expiry = setTimeout(
@@ -259,6 +308,7 @@ export async function setEnglishOnly(
   }
   const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
   setStatus(environmentId, {
+    ...current,
     intensity: current?.intensity ?? { level: 0, until: 0 },
     english: result.value,
   });
@@ -267,28 +317,37 @@ export async function setEnglishOnly(
   return { ok: true, value: result.value };
 }
 
-/** Steps the chat level by one through the collector and keeps its answer. */
+/** Steps the word level (`chat`) or the sentence level (`sentences`) by one through the collector and keeps its answer. */
 export async function stepAnnotationLevel(
   environmentId: EnvironmentId,
   step: 1 | -1,
-): Promise<AnnotationChange<AnnotationStatus["intensity"]> | null> {
+  surface: "chat" | "sentences" = "chat",
+): Promise<AnnotationChange<AnnotationIntensity> | null> {
   entry(environmentId).presses += 1;
   const result = await runAtomCommand(
     appAtomRegistry,
     adjustAnnotationIntensity,
-    { environmentId, input: { step } },
+    { environmentId, input: surface === "chat" ? { step } : { step, surface } },
     { reportFailure: false, reportDefect: false },
   );
   if (result._tag !== "Success") {
     const reason = failureReason(result);
     return reason === null ? null : { ok: false, reason };
   }
-  // A press before the status was read is still the collector's answer; English only is a guess until read now.
+  // A press before the status was read is still the collector's answer; the rest is a guess until read now.
   const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
-  setStatus(environmentId, {
-    english: current?.english ?? { on: false, until: 0, at: 0 },
-    intensity: result.value,
-  });
+  const english = current?.english ?? { on: false, until: 0, at: 0 };
+  setStatus(
+    environmentId,
+    surface === "chat"
+      ? { ...current, english, intensity: result.value }
+      : {
+          ...current,
+          english,
+          intensity: current?.intensity ?? result.value,
+          sentences: result.value,
+        },
+  );
   if (!current) void refreshAnnotationStatus(environmentId);
   return { ok: true, value: result.value };
 }
