@@ -1,3 +1,5 @@
+import { tintStep } from "./japaneseTint.ts";
+
 type HastNode = {
   type?: string;
   tagName?: string;
@@ -342,23 +344,6 @@ export function rehypeChatLevel({
     else markTints(tree);
   };
 }
-
-// A predicted lookup or translation-open chance, 0 to 1 with at most two decimals, as the weave writes it.
-const PREDICTION = /^(?:0(?:\.\d{1,2})?|1(?:\.0{1,2})?)$/;
-// Steps of 0.05 from 0 (green) to 0.5 and up (red).
-const TINT_STEPS = 10;
-
-/**
- * The tint of a predicted chance (`data-p`): its step from 0 (green, p = 0) through yellow to 10 (red, p >= 0.5), or
- * null for anything but a chance the weave writes.
- */
-export function tintStep(value: unknown): number | null {
-  if (typeof value !== "string" || !PREDICTION.test(value)) return null;
-  return Math.round((Math.min(Number(value), 0.5) / 0.5) * TINT_STEPS);
-}
-
-/** The hue of a tint step: 120 (green) at 0 through 60 (yellow) to 0 (red) at 10. */
-export const tintHue = (step: number) => 120 - (120 * step) / TINT_STEPS;
 
 /**
  * Marks the tint (`data-tint`, its step) on what shows Japanese and has a valid `data-p`: a level word, a sentence's
