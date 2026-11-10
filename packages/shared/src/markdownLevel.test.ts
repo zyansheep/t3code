@@ -7,8 +7,19 @@ import corpus from "./markdownLevel.corpus.json" with { type: "json" };
 import { rehypeChatLevel } from "./markdownLevel.ts";
 import { CHAT_MARKDOWN_REHYPE_PLUGINS, CHAT_MARKDOWN_REMARK_PLUGINS } from "./markdownPipeline.ts";
 
-type Node = { type: string; tagName?: string; value?: string; children?: Node[] };
+type Node = {
+  type: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: Node[];
+};
 type Level = -3 | -2 | -1 | 0 | 1 | 2 | 3 | "english";
+interface TextOptions {
+  readonly streaming?: boolean;
+  readonly prose?: boolean;
+  readonly sentences?: Level;
+}
 
 const LEVELS: Level[] = [-3, -2, -1, 0, 1, 2, 3];
 const BLOCKS = new Set(["p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "td", "th", "br"]);
@@ -16,8 +27,8 @@ const JAPANESE = /[\p{scx=Han}\p{scx=Hira}\p{scx=Kana}]/gu;
 // A reply cut off mid-stream (the corpus's stream_ cases are prefixes of one reply).
 const isStreaming = (name: string) => name.startsWith("stream_");
 
-/** The message's text at a level, blocks apart, without code when `prose`. */
-function textAt(source: string, level: Level, { streaming = false, prose = false } = {}) {
+/** The message's tree at a word level and a sentence level (the word level when absent). */
+function treeAt(source: string, level: Level, { streaming = false, sentences = level } = {}) {
   const processor = unified()
     .use(remarkParse)
     .use(CHAT_MARKDOWN_REMARK_PLUGINS)
@@ -25,10 +36,20 @@ function textAt(source: string, level: Level, { streaming = false, prose = false
     .use(CHAT_MARKDOWN_REHYPE_PLUGINS)
     .use(rehypeChatLevel, {
       level: level === "english" ? -3 : level,
+      sentenceLevel: sentences === "english" ? -3 : sentences,
       englishOnly: level === "english",
       streaming,
     });
-  const tree = processor.runSync(processor.parse(source), { value: source } as never) as Node;
+  return processor.runSync(processor.parse(source), { value: source } as never) as Node;
+}
+
+/** The message's text at a level, blocks apart, without code when `prose`. */
+function textAt(
+  source: string,
+  level: Level,
+  { streaming = false, prose = false, sentences = level }: TextOptions = {},
+) {
+  const tree = treeAt(source, level, { streaming, sentences });
   const text = (node: Node): string => {
     if (node.type === "text") return node.value ?? "";
     if (prose && (node.tagName === "code" || node.tagName === "pre")) return " ";
@@ -50,6 +71,23 @@ describe("rehypeChatLevel over the review corpus", () => {
     );
     expect(counts).toEqual([...counts].sort((a, b) => a - b));
   });
+
+  it.each(cases)(
+    "only adds Japanese as either dial goes up, the other held: %s",
+    (name, source) => {
+      const streaming = isStreaming(name);
+      for (const held of [-3, 0, 3] as const) {
+        const words = LEVELS.map((level) =>
+          japaneseIn(textAt(source, level, { streaming, sentences: held, prose: true })),
+        );
+        const sentences = LEVELS.map((level) =>
+          japaneseIn(textAt(source, held, { streaming, sentences: level, prose: true })),
+        );
+        expect(words).toEqual([...words].sort((a, b) => a - b));
+        expect(sentences).toEqual([...sentences].sort((a, b) => a - b));
+      }
+    },
+  );
 
   it.each(cases.filter(([name]) => !UNGLOSSED_AS_WRITTEN.has(name)))(
     "shows no Japanese outside code in English only: %s",
@@ -174,5 +212,82 @@ describe("rehypeChatLevel while a reply streams", () => {
     ]) {
       expect(textAt(word + partial, 0, { streaming: true })).toBe("problem then");
     }
+  });
+});
+
+describe("rehypeChatLevel with a word level and a sentence level", () => {
+  // A word at 1 outside the twins, and twins at 0 whose English carries a word at -1.
+  const SOURCE =
+    'The <abbr title="もんだい · problem" data-en="problem" data-on="1">問題</abbr> is small. ' +
+    `<span data-jw="ja" data-on="0">${RAIN}</span>` +
+    '<span data-jw="en" data-on="0">It is raining <abbr title="きょう · today" data-en="today" data-on="-1">今日</abbr>.</span>';
+
+  it("shows words by the word level and twins by the sentence level, each alone", () => {
+    expect(textAt(SOURCE, 1, { sentences: -1 })).toBe("The 問題 is small. It is raining 今日.");
+    expect(textAt(SOURCE, -2, { sentences: 0 })).toBe(`The problem is small. ${RAIN}`);
+    expect(textAt(SOURCE, 3, { sentences: -3 })).toBe("The 問題 is small. It is raining 今日.");
+    expect(textAt(SOURCE, -3, { sentences: 3 })).toBe(`The problem is small. ${RAIN}`);
+    // Without a sentence level, both follow the one level.
+    expect(textAt(SOURCE, 0)).toBe(`The problem is small. ${RAIN}`);
+  });
+
+  it("keeps each kind's malformed markup to its own dial", () => {
+    for (const [name, sentences, expected] of [
+      ["ja_without_en", 1, `Intro. ${RAIN} Outro.`],
+      ["ja_without_en", 0, `Intro. ${RAINING} Outro.`],
+      ["unclosed_ja", 3, `Intro. ${RAINING} Outro.`],
+    ] as const) {
+      const source = (corpus as Record<string, string>)[name]!;
+      expect(textAt(source, -2, { sentences }), name).toBe(expected);
+      expect(textAt(source, 3, { sentences }), name).toBe(expected);
+    }
+  });
+});
+
+describe("rehypeChatLevel's tint", () => {
+  const tints = (source: string, level: Level, sentences: Level = level) => {
+    const found: Array<[string, string]> = [];
+    const visit = (node: Node) => {
+      const tint = node.properties?.dataTint;
+      if (typeof tint === "string") found.push([node.tagName ?? "", tint]);
+      node.children?.forEach(visit);
+    };
+    visit(treeAt(source, level, { sentences }));
+    return found;
+  };
+  const word = (p: string, on = "0") =>
+    `<abbr title="もんだい · problem" data-en="problem" data-on="${on}" data-p="${p}">問題</abbr>`;
+  const twins = (p: string, inner = "0.3") =>
+    `<span data-jw="ja" data-on="0" data-p="${p}"><abbr title="あめ · rain" data-p="${inner}">雨</abbr>です<abbr title="It is rain.">。</abbr></span>` +
+    '<span data-jw="en" data-on="0">It is rain.</span>';
+
+  it("marks green at 0 through red from 0.5, on each shown level word", () => {
+    expect(
+      ["0", "0.05", "0.07", "0.25", "0.5", "0.9", "1", "1.00"].map(
+        (p) => tints(`A ${word(p)}.`, 0)[0]?.[1],
+      ),
+    ).toEqual(["0", "1", "1", "5", "10", "10", "10", "10"]);
+  });
+
+  it("marks a shown Japanese twin and the glossed words inside it, not their English", () => {
+    expect(tints(`${word("0.1")} ${twins("0.2")}`, 0)).toEqual([
+      ["abbr", "2"],
+      ["span", "4"],
+      ["abbr", "6"],
+    ]);
+    // Each by its own dial: the twin's English and the word's English get none.
+    expect(tints(`${word("0.1")} ${twins("0.2")}`, -1, 0)).toEqual([
+      ["span", "4"],
+      ["abbr", "6"],
+    ]);
+    expect(tints(`${word("0.1")} ${twins("0.2")}`, 0, -1)).toEqual([["abbr", "2"]]);
+  });
+
+  it("marks nothing without a valid prediction, in English only, or in a message without levels", () => {
+    for (const p of ["", "-0.1", "1.5", ".5", "0.123", "x", "0,5"]) {
+      expect(tints(`A ${word(p)}.`, 0), p).toEqual([]);
+    }
+    expect(tints(`A ${word("0.2")}. ${twins("0.2")}`, "english")).toEqual([]);
+    expect(tints('A <abbr title="もんだい · problem" data-p="0.2">問題</abbr>.', 0)).toEqual([]);
   });
 });
