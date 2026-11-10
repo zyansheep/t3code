@@ -174,6 +174,8 @@ import {
   annotationStatusKnownAtom,
   chatLevelAtom,
   englishOnlyAtom,
+  japaneseTintAtom,
+  sentenceLevelAtom,
   watchAnnotationStatus,
 } from "../state/annotationStatus";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
@@ -222,7 +224,7 @@ import { MarkdownExternalLinkContent } from "./chat/MarkdownExternalLink";
 import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 import { canUseMarkdownFileShellActions } from "./chat/MarkdownFileLink.logic";
 import { rehypeChipPunctuation } from "./chat/markdownChipPunctuation";
-import { rehypeChatLevel } from "@t3tools/shared/markdownLevel";
+import { type ChatLevel, rehypeChatLevel } from "@t3tools/shared/markdownLevel";
 import { handleMarkdownFragmentClick, rehypeHeadingIds } from "./chat/markdownFragments";
 import { rehypeTextDirection } from "./chat/markdownTextDirection";
 import { hastHasText, hastPlainTextDeep, plainHastText } from "./chat/markdownHast.logic";
@@ -406,22 +408,22 @@ const CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS = [
 ] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
 
 // After heading ids, so links to a heading keep working in English.
-const chatLevelRehypePlugins = (level: number, englishOnly: boolean, streaming: boolean) =>
+const chatLevelRehypePlugins = (options: Required<ChatLevel>) =>
   [
     ...CHAT_MARKDOWN_REHYPE_PLUGINS,
     rehypeHeadingIds,
-    [rehypeChatLevel, { level, englishOnly, streaming }],
+    [rehypeChatLevel, options],
     rehypeTextDirection,
     rehypeChipPunctuation,
   ] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
 
-// One list per chat level and English only, finished or streaming, so each keeps its renderer and parse cache.
+// One list per pair of levels and English only, finished or streaming, so each keeps its renderer and parse cache.
 const levelPluginLists = new Map<string, ReturnType<typeof chatLevelRehypePlugins>>();
-function levelRehypePlugins(level: number, englishOnly: boolean, streaming: boolean) {
-  const key = `${level} ${englishOnly} ${streaming}`;
+function levelRehypePlugins(options: Required<ChatLevel>) {
+  const { level, sentenceLevel, englishOnly, streaming } = options;
+  const key = `${level} ${sentenceLevel} ${englishOnly} ${streaming}`;
   let plugins = levelPluginLists.get(key);
-  if (!plugins)
-    levelPluginLists.set(key, (plugins = chatLevelRehypePlugins(level, englishOnly, streaming)));
+  if (!plugins) levelPluginLists.set(key, (plugins = chatLevelRehypePlugins(options)));
   return plugins;
 }
 
@@ -1004,7 +1006,7 @@ function openedAbbreviation(
   container: HTMLElement,
   trigger: Element,
   text: string,
-  level: number | undefined,
+  levels: ReportedLevels,
 ) {
   const { triggers, place } = describeAnnotations(container);
   const position = triggers.findIndex((entry) => entry.trigger === trigger);
@@ -1015,10 +1017,13 @@ function openedAbbreviation(
     view: ANNOTATION_VIEW,
     context: annotationContext(text),
     position,
-    ...(level === undefined ? {} : { level }),
+    ...levels,
     ...place,
   };
 }
+
+/** The levels a message with levels reports it was rendered at: words, and sentences when they differ. */
+type ReportedLevels = { readonly level?: number; readonly sentenceLevel?: number };
 
 interface OpenAbbreviation {
   readonly trigger: Element;
@@ -1911,8 +1916,15 @@ function ChatMarkdown({
   // In English only, glosses render as plain English, so nothing in the message is Japanese to report on.
   const englishOnly = useAtomValue(englishOnlyAtom(annotated ? environmentId : null));
   const level = useAtomValue(chatLevelAtom(hasLevels ? environmentId : null));
-  // Reports from a message with levels carry the one it is rendered at.
+  const sentenceLevel = useAtomValue(sentenceLevelAtom(hasLevels ? environmentId : null));
+  const tinted = useAtomValue(japaneseTintAtom);
+  // Reports from a message with levels carry the ones it is rendered at, the sentence level when it differs.
   const reportedLevel = hasLevels ? level : undefined;
+  const reportedSentenceLevel = hasLevels && sentenceLevel !== level ? sentenceLevel : undefined;
+  const reportedLevels: ReportedLevels = {
+    ...(reportedLevel === undefined ? {} : { level: reportedLevel }),
+    ...(reportedSentenceLevel === undefined ? {} : { sentenceLevel: reportedSentenceLevel }),
+  };
   const glossed = hasAbbreviations && !englishOnly;
   // A message with levels reports only once its server's level is known, never at a guessed one.
   const statusKnown = useAtomValue(annotationStatusKnownAtom(hasLevels ? environmentId : null));
@@ -1935,9 +1947,18 @@ function ChatMarkdown({
       view: ANNOTATION_VIEW,
       context: annotationContext(text),
       ...(reportedLevel === undefined ? {} : { level: reportedLevel }),
+      ...(reportedSentenceLevel === undefined ? {} : { sentenceLevel: reportedSentenceLevel }),
       report: (items) => reportReading(items),
     });
-  }, [reporting, environmentId, isStreaming, markdownRef, text, reportedLevel]);
+  }, [
+    reporting,
+    environmentId,
+    isStreaming,
+    markdownRef,
+    text,
+    reportedLevel,
+    reportedSentenceLevel,
+  ]);
   const finishAbbreviation = () => {
     const open = openAbbreviation.current;
     openAbbreviation.current = null;
@@ -1972,7 +1993,9 @@ function ChatMarkdown({
       at: Date.now(),
       kind,
       opened:
-        reporting && container ? openedAbbreviation(container, trigger, text, reportedLevel) : null,
+        reporting && container
+          ? openedAbbreviation(container, trigger, text, reportedLevels)
+          : null,
     };
   };
 
@@ -1986,6 +2009,7 @@ function ChatMarkdown({
         className,
       )}
       data-streaming={componentState.isStreaming ? "" : undefined}
+      data-japanese-tint={hasLevels && tinted && !englishOnly ? "" : undefined}
       onCopy={handleCopy}
     >
       <ChatMarkdownRendererContext value={componentState}>
@@ -2000,11 +2024,12 @@ function ChatMarkdown({
                 !parseRawHtml
                   ? CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
                   : (annotated && englishOnly) || hasLevels || isWriting(index)
-                    ? levelRehypePlugins(
-                        englishOnly ? -3 : hasLevels ? level : 0,
+                    ? levelRehypePlugins({
+                        level: englishOnly ? -3 : hasLevels ? level : 0,
+                        sentenceLevel: englishOnly ? -3 : hasLevels ? sentenceLevel : 0,
                         englishOnly,
-                        isWriting(index),
-                      )
+                        streaming: isWriting(index),
+                      })
                     : CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
               }
               shared={!uncachedPlugins}

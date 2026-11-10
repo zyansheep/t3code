@@ -7,7 +7,7 @@ import { orchestrationEnvironment } from "~/state/orchestration";
 import { useThreadProjection } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useDebouncedValue } from "~/state/queries";
-import { chatLevelAtom, englishOnlyAtom } from "~/state/annotationStatus";
+import { chatLevelAtom, englishOnlyAtom, sentenceLevelAtom } from "~/state/annotationStatus";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { type ThreadFindMatch, type ThreadFindStart, stepThreadFindIndex } from "./threadFind";
 import {
@@ -282,10 +282,14 @@ function useServerResults(
   const debouncedQuery = useDebouncedValue(normalizedQuery, 100);
   const environmentId = thread?.environmentId;
   const threadId = thread?.threadId;
-  // Replies render at the chat level of this client's own server, as ChatMarkdown does; find counts what they show.
+  // Replies render at the chat levels of this client's own server, as ChatMarkdown does; find counts what they show.
   const levelEnvironmentId = useAtomValue(primaryEnvironmentIdAtom) ?? environmentId ?? null;
+  const level = useAtomValue(chatLevelAtom(levelEnvironmentId));
+  const sentenceLevel = useAtomValue(sentenceLevelAtom(levelEnvironmentId));
   const chatLevel = {
-    level: useAtomValue(chatLevelAtom(levelEnvironmentId)),
+    level,
+    // Only when it differs, as a server from before the sentence level reads the word level for both.
+    ...(sentenceLevel === level ? {} : { sentenceLevel }),
     englishOnly: useAtomValue(englishOnlyAtom(levelEnvironmentId)),
   };
   const target =
