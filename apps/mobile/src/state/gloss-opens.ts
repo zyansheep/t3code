@@ -138,14 +138,15 @@ export function glossContextsOnScreen(): Array<{ view: string; context: string }
 }
 
 /**
- * Reports a word tapped open in a message rendered at `level`. Never throws and never waits: a failed report must not
- * touch the UI.
+ * Reports a word tapped open in a message rendered at word level `level` and sentence level `sentenceLevel`. Never
+ * throws and never waits: a failed report must not touch the UI.
  */
 export function reportGlossOpen(input: {
   readonly environmentId: EnvironmentId;
   readonly messageText: string;
   readonly word: string;
   readonly level?: number | undefined;
+  readonly sentenceLevel?: number | undefined;
 }): void {
   try {
     const at = Date.now();
@@ -158,6 +159,7 @@ export function reportGlossOpen(input: {
       word: input.word,
       at,
       level: input.level,
+      sentenceLevel: input.sentenceLevel,
     });
     if (item === null) return;
     const views = openedViews.get(item.context) ?? new Set<string>();

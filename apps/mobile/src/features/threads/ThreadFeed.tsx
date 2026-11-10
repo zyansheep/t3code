@@ -264,6 +264,7 @@ import { useV2ItemSupport } from "../../state/v2-item-support";
 import { hasLevelMarkup } from "../../lib/markdownLevels";
 import {
   chatJapaneseLevelAtom,
+  chatJapaneseSentenceLevelAtom,
   englishOnlyAtom,
   showGlossedMessage,
 } from "../../state/chat-japanese-view";
@@ -1154,9 +1155,12 @@ function reportGlossOpen(
   messageText: string,
   word: string,
   level: number | undefined,
+  sentenceLevel: number | undefined,
 ) {
   void import("../../state/gloss-opens")
-    .then((reports) => reports.reportGlossOpen({ environmentId, messageText, word, level }))
+    .then((reports) =>
+      reports.reportGlossOpen({ environmentId, messageText, word, level, sentenceLevel }),
+    )
     .catch(() => undefined);
 }
 
@@ -1179,12 +1183,15 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   const { environmentId, glossMessageText } = props;
   const englishOnly = useAtomValue(englishOnlyAtom(environmentId));
   const chatLevel = useAtomValue(chatJapaneseLevelAtom(environmentId));
-  // Only a message with level markup renders, and reports its opens, by level, as the desktop does.
-  const japaneseLevel = hasLevelMarkup(props.markdown) ? chatLevel : undefined;
+  const sentenceLevel = useAtomValue(chatJapaneseSentenceLevelAtom(environmentId));
+  // Only a message with level markup renders, and reports its opens, by its levels, as the desktop does.
+  const leveled = hasLevelMarkup(props.markdown);
+  const japaneseLevel = leveled ? chatLevel : undefined;
+  const japaneseSentenceLevel = leveled ? sentenceLevel : undefined;
   // Words shown in English are not glosses to open; a word below the level is no gloss at all.
-  const onGlossOpen = (word: string, level: number | undefined) => {
+  const onGlossOpen = (word: string, level: number | undefined, sentences: number | undefined) => {
     if (glossMessageText !== undefined && !englishOnly) {
-      reportGlossOpen(environmentId, glossMessageText, word, level);
+      reportGlossOpen(environmentId, glossMessageText, word, level, sentences);
     }
   };
   const linkHandlers: MarkdownLinkHandlers = {
@@ -1208,6 +1215,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
         models={models}
         onGlossOpen={onGlossOpen}
         japaneseLevel={japaneseLevel}
+        japaneseSentenceLevel={japaneseSentenceLevel}
         streaming={props.streaming === true}
         englishOnly={englishOnly}
       />
@@ -1233,8 +1241,13 @@ function AssistantMarkdownBlocks(props: {
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
   readonly models: ReturnType<typeof useModelMentions>;
-  readonly onGlossOpen: (word: string, level: number | undefined) => void;
+  readonly onGlossOpen: (
+    word: string,
+    level: number | undefined,
+    sentenceLevel: number | undefined,
+  ) => void;
   readonly japaneseLevel: number | undefined;
+  readonly japaneseSentenceLevel: number | undefined;
   readonly streaming: boolean;
   readonly englishOnly: boolean;
 }) {
@@ -1282,6 +1295,7 @@ function AssistantMarkdownBlocks(props: {
           renderImage={props.renderImage}
           onGlossOpen={props.onGlossOpen}
           japaneseLevel={props.japaneseLevel}
+          japaneseSentenceLevel={props.japaneseSentenceLevel}
           streaming={props.streaming}
           englishOnly={props.englishOnly}
         />
