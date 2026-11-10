@@ -96,6 +96,7 @@ const decodeIntensityAnswer = Schema.decodeUnknownOption(
     ok: Schema.Boolean,
     intensity: Schema.optional(AnnotationIntensity),
     english: Schema.optional(AnnotationEnglish),
+    sentences: Schema.optional(AnnotationIntensity),
     error: Schema.optional(Schema.String),
   }),
 );
@@ -135,15 +136,20 @@ const asIntensityError = Effect.mapError((error: unknown) =>
 );
 
 /**
- * Asks the collector at the origin of `T3CODE_ANNOTATION_EVENTS_URL` to make chat annotations heavier (`step: 1`) or
- * lighter (`-1`) for a while, with `POST /v1/intensity`, and returns its new level and when that ends. Fails with a
- * reason short enough to show: `not configured`, the collector's own error, or `collector unreachable`.
+ * Asks the collector at the origin of `T3CODE_ANNOTATION_EVENTS_URL` to make chat's words (`surface: "chat"`, the
+ * default) or sentences (`"sentences"`) heavier (`step: 1`) or lighter (`-1`) for a while, with `POST /v1/intensity`,
+ * and returns that dial's new level and when it ends. Fails with a reason short enough to show: `not configured`, the
+ * collector's own error (a collector with one level for both refuses the sentences), or `collector unreachable`.
  */
 export const adjustAnnotationIntensity = Effect.fn("adjustAnnotationIntensity")(
   function* (input: AnnotationIntensityAdjustInput) {
     const url = yield* intensityEndpoint("/v1/intensity");
     const request = yield* HttpClientRequest.post(url).pipe(
-      HttpClientRequest.bodyJson({ surface: "chat", step: input.step, source: "t3" }),
+      HttpClientRequest.bodyJson({
+        surface: input.surface ?? "chat",
+        step: input.step,
+        source: "t3",
+      }),
     );
     const { answer, refusal } = yield* askIntensityCollector(request);
     if (answer?.intensity === undefined) return yield* refusal();
@@ -154,8 +160,10 @@ export const adjustAnnotationIntensity = Effect.fn("adjustAnnotationIntensity")(
 );
 
 /**
- * Reads the collector's chat level and English-only state with `GET /v1/intensity?surface=chat`; a collector that
- * predates English only answers without it, which reads as off. Fails like `adjustAnnotationIntensity`.
+ * Reads the collector's chat levels and English-only state with `GET /v1/intensity?surface=chat`: the word level, and
+ * the sentence level from a collector with two (one with one level for both answers without it, and the status has
+ * none). A collector that predates English only answers without it, which reads as off. Fails like
+ * `adjustAnnotationIntensity`.
  */
 export const getAnnotationStatus = Effect.fn("getAnnotationStatus")(
   function* () {
@@ -165,6 +173,7 @@ export const getAnnotationStatus = Effect.fn("getAnnotationStatus")(
     return {
       intensity: answer.intensity,
       english: answer.english ?? ENGLISH_OFF,
+      ...(answer.sentences === undefined ? {} : { sentences: answer.sentences }),
     } satisfies AnnotationStatus;
   },
   Effect.timeout("3 seconds"),

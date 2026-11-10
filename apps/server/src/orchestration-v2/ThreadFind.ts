@@ -73,8 +73,12 @@ class TextKey extends Data.Class<{
   cwd: string | undefined;
   skills: NonNullable<OrchestrationV2SearchThreadInput["skills"]>;
   theme: OrchestrationV2SearchThreadInput["theme"];
-  /** The client's chat level for assistant messages, flat so keys compare by value; `null` reads them as written. */
+  /**
+   * The client's chat levels for assistant messages (words, then sentences), flat so keys compare by value; `null`
+   * reads them as written.
+   */
   level: number | null;
+  sentenceLevel: number | null;
   englishOnly: boolean;
 }> {}
 
@@ -100,6 +104,10 @@ function textKey(
     skills,
     theme,
     level: item.type === "assistant_message" && chatLevel ? chatLevel.level : null,
+    sentenceLevel:
+      item.type === "assistant_message" && chatLevel
+        ? (chatLevel.sentenceLevel ?? chatLevel.level)
+        : null,
     englishOnly: item.type === "assistant_message" && chatLevel ? chatLevel.englishOnly : false,
   });
 }
@@ -117,7 +125,13 @@ function parseText(key: TextKey): readonly string[] {
         key.cwd,
         key.skills,
         key.theme,
-        key.level === null ? undefined : { level: key.level, englishOnly: key.englishOnly },
+        key.level === null
+          ? undefined
+          : {
+              level: key.level,
+              sentenceLevel: key.sentenceLevel ?? key.level,
+              englishOnly: key.englishOnly,
+            },
       ) ?? []);
 }
 
