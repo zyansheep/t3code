@@ -1,4 +1,5 @@
 import * as NodeFS from "node:fs";
+import { parseMarkdown } from "react-native-enriched-markdown/src/web/parseMarkdown";
 import { describe, expect, it } from "vite-plus/test";
 
 import { markdownWithHtml, parseMarkdownSource, type MarkdownNode } from "./markdownDocument";
@@ -79,8 +80,12 @@ const LEVELS = [-3, -2, -1, 0, 1, 2, 3];
 const gloss = (word: string, title: string) => `[${word}](<${glossHref(title)}>)`;
 
 /** A message at a level as the phone renders it: the level, then the gloss links. */
-const at = (markdown: string, level: number, streaming = false) =>
-  markdownWithHtml(markdownAtLevel(markdown, level, streaming));
+const at = (
+  markdown: string,
+  level: number,
+  streaming = false,
+  options: Parameters<typeof markdownAtLevel>[3] = {},
+) => markdownWithHtml(markdownAtLevel(markdown, level, streaming, options));
 
 /** English only: -3, then older glosses as English. */
 const englishOnly = (markdown: string) =>
@@ -123,6 +128,55 @@ describe("markdownAtLevel", () => {
     expect(at(LEVELED, 1)).toBe(`The ${problem} is small. It is raining ${TODAY}. We stay in.`);
     expect(at(LEVELED, 0)).toBe(`The problem is small. It is raining ${TODAY}. We stay in.`);
     expect(at(LEVELED, -1)).toBe("The problem is small. It is raining today. We stay in.");
+  });
+
+  it("shows words by the word level and twins by the sentence level, each alone", () => {
+    const problem = gloss("問題", "もんだい · problem");
+    const sentences = (level: number, sentenceLevel: number) =>
+      at(LEVELED, level, false, { sentenceLevel });
+    expect(sentences(1, -1)).toBe(`The ${problem} is small. It is raining ${TODAY}. We stay in.`);
+    expect(sentences(-2, 2)).toBe(`The problem is small. ${JAPANESE_SENTENCE} We stay in.`);
+    expect(sentences(3, -3)).toBe(`The ${problem} is small. It is raining ${TODAY}. We stay in.`);
+    expect(sentences(-1, -3)).toBe("The problem is small. It is raining today. We stay in.");
+    // A twin with no English one after it follows the sentence level too.
+    const alone =
+      '<span data-jw="ja" data-on="1"><abbr title="あめ · rain">雨</abbr><abbr title="Rain.">。</abbr></span>';
+    expect(at(alone, 3, false, { sentenceLevel: 0 })).toBe("Rain.");
+    expect(at(alone, -2, false, { sentenceLevel: 1 })).toBe(
+      `${gloss("雨", "あめ · rain")}${gloss("。", "Rain.")}`,
+    );
+  });
+
+  it("tints a shown Japanese twin's text between its words, and only with the tint on", async () => {
+    const twins =
+      '<span data-jw="ja" data-on="0" data-p="0.2"><abbr title="あめ · rain" data-p="0.3">雨</abbr>です <b>ね</b><abbr title="It is rain.">。</abbr></span>' +
+      '<span data-jw="en" data-on="0" data-p="0.2">It is [rain].</span>';
+    const rain = `[雨](<t3-gloss:p6:${encodeURIComponent("あめ · rain")}>)`;
+    const mark = gloss("。", "It is rain.");
+    expect(at(twins, 0, false, { tint: true })).toBe(
+      `${rain}[です](<t3-tint:4>) [ね](<t3-tint:4>)${mark}`,
+    );
+    expect(at(twins, 0)).toBe(`${rain}です ね${mark}`);
+    // Its English twin and a twin without a valid prediction get none.
+    expect(at(twins, 0, false, { tint: true, sentenceLevel: -1 })).toBe("It is [rain].");
+    expect(at(twins.replace('data-p="0.2"', 'data-p="1.5"'), 0, false, { tint: true })).toBe(
+      `${rain}です ね${mark}`,
+    );
+    const bracketed = twins.replace("です", "で[す]");
+    const markdown = at(bracketed, 0, false, { tint: true });
+    expect(markdown).toContain("[で\\[す\\]](<t3-tint:4>)");
+    // The native parser reads each run as a link of its own, beside the words' gloss links.
+    const paragraph = (await parseMarkdown(markdown))?.children?.[0];
+    expect(paragraph).toMatchObject({
+      type: "Paragraph",
+      children: [
+        { type: "Link", children: [{ type: "Text", content: "雨" }] },
+        { type: "Link", children: [{ type: "Text", content: "で[す]" }] },
+        { type: "Text", content: " " },
+        { type: "Link", children: [{ type: "Text", content: "ね" }] },
+        { type: "Link", children: [{ type: "Text", content: "。" }] },
+      ],
+    });
   });
 
   it("nests: what is Japanese at a level stays Japanese a level up", () => {

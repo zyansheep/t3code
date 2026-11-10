@@ -104,6 +104,32 @@ describe("glossOpenItem", () => {
     expect(() => decodeReport({ items: [{ ...opened(0), level: 4 }] })).toThrow();
   });
 
+  it("carries the sentence level beside the word level when it differs, through the report's contract", () => {
+    const opened = (level: number | undefined, sentenceLevel: number | undefined) =>
+      glossOpenItem({
+        session: "s1",
+        sequence: 1,
+        messageText: "raw text",
+        word: "mondai",
+        at: NOW,
+        level,
+        sentenceLevel,
+      })!;
+    const item = opened(-1, 2);
+    expect(item).toMatchObject({ level: -1, sentenceLevel: 2 });
+    expect(decodeReport({ items: [item] }).items[0]).toEqual(item);
+    expect(isItem(item)).toBe(true);
+    // Equal to the word level, or not one the contract takes, or with no word level: none.
+    for (const [level, sentenceLevel] of [
+      [2, 2],
+      [2, 4],
+      [2, undefined],
+      [undefined, 2],
+    ] as const) {
+      expect(opened(level, sentenceLevel)).not.toHaveProperty("sentenceLevel");
+    }
+  });
+
   it("hashes as the desktop does", () => {
     expect(fnv1a32("")).toBe(0x811c9dc5);
     expect(fnv1a32("a")).toBe(0xe40c292c);

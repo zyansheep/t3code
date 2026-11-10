@@ -78,15 +78,21 @@ export interface SelectableMarkdownTextProps {
   readonly preserveSoftBreaks?: boolean;
   readonly onLinkPress?: (href: string) => void;
   /**
-   * A tap opened the gloss of this word (closing one is not reported), in markdown rendered at `level`, the
-   * `japaneseLevel` it had then.
+   * A tap opened the gloss of this word (closing one is not reported), in markdown rendered at `level` and
+   * `sentenceLevel`, the `japaneseLevel` and `japaneseSentenceLevel` it had then.
    */
-  readonly onGlossOpen?: (word: string, level: number | undefined) => void;
+  readonly onGlossOpen?: (
+    word: string,
+    level: number | undefined,
+    sentenceLevel: number | undefined,
+  ) => void;
   /**
-   * The chat level to render the weave's leveled Japanese at, -3 to 3 (lib/markdownLevels.ts); without it, leveled
+   * The word level to render the weave's leveled Japanese at, -3 to 3 (lib/markdownLevels.ts); without it, leveled
    * words and sentences show as written.
    */
   readonly japaneseLevel?: number;
+  /** The sentence level its twins render at; `japaneseLevel` when absent. */
+  readonly japaneseSentenceLevel?: number;
   /** The markdown is still streaming in, so level markup left open at its end follows its threshold. */
   readonly streaming?: boolean;
   /** Older messages' glossed Japanese shows as English (lib/markdownLevels.ts). */
