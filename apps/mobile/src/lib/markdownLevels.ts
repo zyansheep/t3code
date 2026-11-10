@@ -5,13 +5,17 @@
  */
 import type { PhrasingContent } from "mdast";
 
+import { tintStep } from "@t3tools/shared/japaneseTint";
+
 import {
   attribute,
+  escapeLinkLabel,
   markdownHtmlTags,
   parseMarkdownSource,
   type MarkdownNode,
 } from "./markdownDocument";
 import { escapeMarkdown, glossHrefTitle, hasGlossLinks } from "./markdownGlosses";
+import { sentenceTintHref } from "./markdownTint";
 
 /** The level English only renders at: nothing is Japanese there, whatever an element's threshold. */
 export const ENGLISH_ONLY_LEVEL = -3;
@@ -300,16 +304,31 @@ function lastTranslation(markdown: string, twin: Element, abbrs: ReadonlyArray<E
   return translation;
 }
 
+export interface LevelOptions {
+  /** The sentence level twins show by, -3 to 3; the word level when absent. */
+  readonly sentenceLevel?: number | undefined;
+  /** Tint each shown Japanese twin's text by its `data-p` (lib/markdownTint.ts). */
+  readonly tint?: boolean | undefined;
+}
+
 /**
- * The message as written at `level` (-3 to 3, -3 while English only is on), before markdownWithHtml drops attributes:
- * a swapped word, `<abbr data-en data-on="N">`, and a sentence's twins, `<span data-jw="ja|en" data-on="N">`, show
- * their Japanese at levels N and up and their English below; anything without a threshold stays as written.
+ * The message as written at the word level `level` (-3 to 3, -3 while English only is on) and the sentence level,
+ * before markdownWithHtml drops attributes: a swapped word, `<abbr data-en data-on="N">`, shows its Japanese at word
+ * levels N and up and its English below, and a sentence's twins, `<span data-jw="ja|en" data-on="N">`, the same by the
+ * sentence level; anything without a threshold stays as written.
  */
-export function markdownAtLevel(source: string, level: number, streaming = false): string {
+export function markdownAtLevel(
+  source: string,
+  level: number,
+  streaming = false,
+  options: LevelOptions = {},
+): string {
   const markdown = streaming ? withoutPartialTag(source) : source;
   if (!hasLevelMarkup(markdown)) return markdown;
+  const sentences = options.sentenceLevel ?? level;
   const tags: HtmlTag[] = [];
-  collectTags(markdown, parseMarkdownSource(markdown), tags);
+  const root = parseMarkdownSource(markdown);
+  collectTags(markdown, root, tags);
   const elements = pairElements(tags, markdown.trimEnd().length, streaming);
   const abbrs = elements.filter((element) => element.name === "abbr");
   const twins = elements.filter(
@@ -343,16 +362,22 @@ export function markdownAtLevel(source: string, level: number, streaming = false
   const replace = (element: Element, content: string) =>
     edits.push({ start: element.opening.start, end: element.end, content });
 
+  const shownJapanese: Element[] = [];
   for (const twin of twins) {
     const on = threshold(twin)!;
     const japanese = twinOf(twin) === "ja";
     if (partner.has(twin)) {
-      if ((!broken && level >= on) === japanese) show(twin);
+      if ((!broken && sentences >= on) === japanese) show(twin);
       else replace(twin, "");
-    } else if (!japanese || level >= on) {
+      if (japanese && !broken && sentences >= on) shownJapanese.push(twin);
+    } else if (!japanese || sentences >= on) {
       // An English twin alone always shows; a Japanese one alone shows at its threshold, and below it its translation.
       show(twin);
+      if (japanese) shownJapanese.push(twin);
     } else replace(twin, plainText(lastTranslation(markdown, twin, abbrs)));
+  }
+  if (options.tint) {
+    for (const twin of shownJapanese) tintTwin(markdown, root, twin, abbrs, edits);
   }
   for (const abbr of abbrs) {
     const on = threshold(abbr);
@@ -376,4 +401,43 @@ export function markdownAtLevel(source: string, level: number, streaming = false
   }
   // A hidden twin's edit covers the words inside it.
   return applyEdits(markdown, edits);
+}
+
+/**
+ * Tints a shown Japanese twin with a valid `data-p`: each run of its text outside its glossed words (which carry their
+ * own tint) becomes a link the tint styles, its whitespace left outside.
+ */
+function tintTwin(
+  markdown: string,
+  root: MarkdownNode,
+  twin: Element,
+  abbrs: ReadonlyArray<Element>,
+  edits: Edit[],
+) {
+  const step = tintStep(attribute(twin.opening.html, "data-p"));
+  if (step === null || !twin.closing || twin.broken) return;
+  const from = twin.opening.end;
+  const to = twin.closing.start;
+  const visit = (node: MarkdownNode) => {
+    const start = startOf(node);
+    const end = endOf(node);
+    if (start === undefined || end === undefined || end <= from || start >= to) return;
+    if (node.type === "link" || node.type === "linkReference") return;
+    if (node.type === "text") {
+      if (start < from || end > to) return;
+      if (abbrs.some((abbr) => abbr.opening.start < start && end <= abbr.end)) return;
+      const text = markdown.slice(start, end);
+      const core = text.trim();
+      if (core === "") return;
+      const lead = text.length - text.trimStart().length;
+      edits.push({
+        start: start + lead,
+        end: start + lead + core.length,
+        content: `[${escapeLinkLabel(core)}](<${sentenceTintHref(step)}>)`,
+      });
+      return;
+    }
+    if ("children" in node) for (const child of node.children) visit(child);
+  };
+  visit(root);
 }

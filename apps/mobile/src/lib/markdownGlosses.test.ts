@@ -92,6 +92,22 @@ describe("glossed words in native Markdown", () => {
     expect(glossOf(url)).toEqual({ index: 0, title: "もんだい · problem" });
   });
 
+  it("carries a valid prediction's tint step in the link, which the title and numbering ignore", async () => {
+    const tinted = (p: string) =>
+      markdownWithHtml(`<abbr title="もんだい · problem" data-p="${p}">問題</abbr>`);
+    expect(tinted("0.25")).toBe(`[問題](<t3-gloss:p5:${problemHref.slice("t3-gloss:".length)}>)`);
+    expect(tinted("0.9")).toContain("<t3-gloss:p10:");
+    for (const p of ["", "2", ".5", "x"]) expect(tinted(p)).toBe(`[問題](<${problemHref}>)`);
+
+    const markdown = markdownWithGlosses(tinted("0.25"), new Set([0]));
+    expect(markdown).toContain("(*もんだい · problem*)");
+    const url = /\(<(t3-gloss:[^>]*)>\)/.exec(markdown)![1]!;
+    expect(url).toMatch(/^t3-gloss:0\/p5:/);
+    expect(glossOf(url)).toEqual({ index: 0, title: "もんだい · problem" });
+    const link = (await parseMarkdown(markdown))?.children?.[0]?.children?.[0];
+    expect(link).toMatchObject({ type: "Link", children: [{ type: "Text", content: "問題" }] });
+  });
+
   it("leaves Markdown with no glosses alone", () => {
     expect(markdownWithGlosses("[a](<https://example.com>)", new Set([0]))).toBe(
       "[a](<https://example.com>)",

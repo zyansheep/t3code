@@ -1,16 +1,24 @@
 /**
- * Glossed words in chat: `<abbr title="reading · meaning">word</abbr>`. The native renderer has no
- * tooltips, so markdownWithHtml turns each one into a link to `t3-gloss:<title>`, and a tap shows
- * the title in parentheses after the word until the next tap on it.
+ * Glossed words in chat: `<abbr title="reading · meaning">word</abbr>`. The native renderer has no tooltips, so
+ * markdownWithHtml turns each into a link to `t3-gloss:<title>` (`t3-gloss:p<step>:<title>` with a tint, see
+ * lib/markdownTint.ts), and a tap shows the title in parentheses after the word until the next tap on it.
  */
+import { tintStep } from "@t3tools/shared/japaneseTint";
 
 const GLOSS_SCHEME = "t3-gloss:";
 export const GLOSS_LINK_PATTERN = `^${GLOSS_SCHEME}`;
 const GLOSS_DESTINATION = /\]\(<t3-gloss:([^>/]*)>\)/g;
+// encodeURIComponent writes a title's ":" as %3A, so a title never starts like this.
+const TINT_PREFIX = /^p\d{1,2}:/;
 
-export function glossHref(title: string | null | undefined): string | undefined {
+export function glossHref(
+  title: string | null | undefined,
+  prediction?: string | null,
+): string | undefined {
   const text = title?.replace(/\s+/g, " ").trim();
-  return text ? `${GLOSS_SCHEME}${encodeURIComponent(text)}` : undefined;
+  if (!text) return undefined;
+  const step = tintStep(prediction);
+  return `${GLOSS_SCHEME}${step === null ? "" : `p${step}:`}${encodeURIComponent(text)}`;
 }
 
 export function isGlossHref(url: string): boolean {
@@ -20,7 +28,7 @@ export function isGlossHref(url: string): boolean {
 /** The title of a gloss link as markdownWithHtml writes it (not yet numbered), or null for another link. */
 export function glossHrefTitle(url: string): string | null {
   if (!isGlossHref(url)) return null;
-  const encoded = url.slice(GLOSS_SCHEME.length);
+  const encoded = url.slice(GLOSS_SCHEME.length).replace(TINT_PREFIX, "");
   try {
     return decodeURIComponent(encoded);
   } catch {
@@ -32,7 +40,7 @@ export function glossHrefTitle(url: string): string | null {
 export function glossOf(url: string): { readonly index: number; readonly title: string } | null {
   const match = /^t3-gloss:(\d+)\/(.*)$/s.exec(url);
   if (!match) return null;
-  let title = match[2]!;
+  let title = match[2]!.replace(TINT_PREFIX, "");
   try {
     title = decodeURIComponent(title);
   } catch {
@@ -57,9 +65,9 @@ export function markdownWithGlosses(markdown: string, expanded: ReadonlySet<numb
     const n = index++;
     const link = `](<${GLOSS_SCHEME}${n}/${encoded}>)`;
     if (!expanded.has(n)) return link;
-    let title = encoded;
+    let title = encoded.replace(TINT_PREFIX, "");
     try {
-      title = decodeURIComponent(encoded);
+      title = decodeURIComponent(title);
     } catch {
       // Left encoded: still readable.
     }
