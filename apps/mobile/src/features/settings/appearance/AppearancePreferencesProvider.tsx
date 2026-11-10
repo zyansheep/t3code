@@ -72,6 +72,9 @@ interface AppearancePreferencesContextValue {
   readonly setCodeWordBreak: (value: boolean) => void;
   readonly mathRenderingEnabled: boolean;
   readonly setMathRenderingEnabled: (value: boolean) => void;
+  /** Chat Japanese tinted by its predicted difficulty, on this phone; on unless turned off. */
+  readonly chatJapaneseTintEnabled: boolean;
+  readonly setChatJapaneseTintEnabled: (value: boolean) => void;
 }
 
 const AppearancePreferencesContext = createContext<AppearancePreferencesContextValue | null>(null);
@@ -293,6 +296,10 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
   const setMathRenderingEnabled = (value: boolean) =>
     updatePreferences({ mathRenderingEnabled: value });
 
+  const chatJapaneseTintEnabled = storedPreferences?.chatJapaneseTintEnabled !== false;
+  const setChatJapaneseTintEnabled = (value: boolean) =>
+    updatePreferences({ chatJapaneseTintEnabled: value });
+
   const value = useMemo(
     (): AppearancePreferencesContextValue => ({
       appearance,
@@ -317,6 +324,8 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       setCodeWordBreak,
       mathRenderingEnabled,
       setMathRenderingEnabled,
+      chatJapaneseTintEnabled,
+      setChatJapaneseTintEnabled,
     }),
     [
       appearance,
@@ -340,6 +349,8 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       setCodeWordBreak,
       mathRenderingEnabled,
       setMathRenderingEnabled,
+      chatJapaneseTintEnabled,
+      setChatJapaneseTintEnabled,
     ],
   );
 

@@ -3,16 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 // Each request waits until the test answers it, by its RPC's tag.
 const rpc = vi.hoisted(() => ({
-  pending: [] as Array<{ readonly tag: string; readonly answer: (value: unknown) => void }>,
+  pending: [] as Array<{
+    readonly tag: string;
+    readonly request: unknown;
+    readonly answer: (value: unknown) => void;
+  }>,
 }));
 
 vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@t3tools/client-runtime/state/runtime")>()),
   createEnvironmentRpcCommand: (_runtime: unknown, options: { readonly tag: string }) =>
     options.tag,
-  runAtomCommand: (_registry: unknown, tag: string) =>
+  runAtomCommand: (_registry: unknown, tag: string, request: unknown) =>
     new Promise((resolve) => {
-      rpc.pending.push({ tag, answer: (value) => resolve({ _tag: "Success", value }) });
+      rpc.pending.push({ tag, request, answer: (value) => resolve({ _tag: "Success", value }) });
     }),
 }));
 vi.mock("../connection/runtime", () => ({ connectionAtomRuntime: {} }));
@@ -25,7 +29,8 @@ vi.mock("./workspace", async () => {
 
 const { appAtomRegistry } = await import("./atom-registry");
 const { annotationStatusAtom } = await import("./chat-japanese-view");
-const { stepAnnotationLevel, watchAnnotationStatus } = await import("./chat-japanese");
+const { setEnglishOnly, stepAnnotationLevel, watchAnnotationStatus } =
+  await import("./chat-japanese");
 
 const NOW = 1_800_000_000_000;
 const FAR = NOW + 3_600_000;
@@ -77,5 +82,36 @@ describe("chat Japanese status and presses", () => {
     expect(appAtomRegistry.get(annotationStatusAtom(environmentId))).toEqual(status(-1, false));
     await answer(WS_METHODS.serverGetAnnotationStatus, status(-1, true));
     expect(appAtomRegistry.get(annotationStatusAtom(environmentId))).toEqual(status(-1, true));
+  });
+
+  it("steps the sentences on their own, keeps them through English only, and ends each when its time is up", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(NOW);
+    const environmentId = EnvironmentId.make("env-sentences");
+    appAtomRegistry.set(annotationStatusAtom(environmentId), {
+      ...status(1, false),
+      sentences: { level: 0, until: 0 },
+    });
+    const press = stepAnnotationLevel(environmentId, -1, "sentences");
+    expect(rpc.pending.at(-1)).toMatchObject({
+      tag: WS_METHODS.serverAdjustAnnotationIntensity,
+      request: { environmentId, input: { step: -1, surface: "sentences" } },
+    });
+    await answer(WS_METHODS.serverAdjustAnnotationIntensity, { level: -1, until: NOW + 1_000 });
+    await expect(press).resolves.toEqual({ ok: true, value: { level: -1, until: NOW + 1_000 } });
+    const english = setEnglishOnly(environmentId, true);
+    await answer(WS_METHODS.serverSetAnnotationEnglish, { on: true, until: FAR, at: NOW });
+    await english;
+    expect(appAtomRegistry.get(annotationStatusAtom(environmentId))).toEqual({
+      intensity: { level: 1, until: FAR },
+      english: { on: true, until: FAR, at: NOW },
+      sentences: { level: -1, until: NOW + 1_000 },
+    });
+    vi.advanceTimersByTime(1_000);
+    expect(appAtomRegistry.get(annotationStatusAtom(environmentId))?.sentences).toEqual({
+      level: 0,
+      until: 0,
+    });
+    expect(appAtomRegistry.get(annotationStatusAtom(environmentId))?.intensity.level).toBe(1);
   });
 });
