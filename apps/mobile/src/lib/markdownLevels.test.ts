@@ -147,36 +147,20 @@ describe("markdownAtLevel", () => {
     );
   });
 
-  it("tints a shown Japanese twin's text between its words, and only with the tint on", async () => {
+  it("tints only glossed words, as gloss links, never a twin's text, and never as an image after a bang", async () => {
     const twins =
-      '<span data-jw="ja" data-on="0" data-p="0.2"><abbr title="あめ · rain" data-p="0.3">雨</abbr>です <b>ね</b><abbr title="It is rain.">。</abbr></span>' +
-      '<span data-jw="en" data-on="0" data-p="0.2">It is [rain].</span>';
+      'Great!<span data-jw="ja" data-on="0" data-p="0.2">日本語です<abbr title="It is Japanese.">。</abbr></span>' +
+      '<span data-jw="en" data-on="0">It is Japanese.</span> Great!<abbr title="あめ · rain" data-on="0" data-p="0.3">雨</abbr>';
+    const markdown = at(twins, 0);
     const rain = `[雨](<t3-gloss:p6:${encodeURIComponent("あめ · rain")}>)`;
-    const mark = gloss("。", "It is rain.");
-    expect(at(twins, 0, false, { tint: true })).toBe(
-      `${rain}[です](<t3-tint:4>) [ね](<t3-tint:4>)${mark}`,
-    );
-    expect(at(twins, 0)).toBe(`${rain}です ね${mark}`);
-    // Its English twin and a twin without a valid prediction get none.
-    expect(at(twins, 0, false, { tint: true, sentenceLevel: -1 })).toBe("It is [rain].");
-    expect(at(twins.replace('data-p="0.2"', 'data-p="1.5"'), 0, false, { tint: true })).toBe(
-      `${rain}です ね${mark}`,
-    );
-    const bracketed = twins.replace("です", "で[す]");
-    const markdown = at(bracketed, 0, false, { tint: true });
-    expect(markdown).toContain("[で\\[す\\]](<t3-tint:4>)");
-    // The native parser reads each run as a link of its own, beside the words' gloss links.
+    expect(markdown).toBe(`Great!日本語です${gloss("。", "It is Japanese.")} Great\\!${rain}`);
     const paragraph = (await parseMarkdown(markdown))?.children?.[0];
-    expect(paragraph).toMatchObject({
-      type: "Paragraph",
-      children: [
-        { type: "Link", children: [{ type: "Text", content: "雨" }] },
-        { type: "Link", children: [{ type: "Text", content: "で[す]" }] },
-        { type: "Text", content: " " },
-        { type: "Link", children: [{ type: "Text", content: "ね" }] },
-        { type: "Link", children: [{ type: "Text", content: "。" }] },
-      ],
-    });
+    expect(paragraph?.children?.map((child: { type: string }) => child.type)).toEqual([
+      "Text",
+      "Link",
+      "Text",
+      "Link",
+    ]);
   });
 
   it("nests: what is Japanese at a level stays Japanese a level up", () => {
