@@ -4,8 +4,8 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { useEffect } from "react";
 import { View } from "react-native";
 
-import { AndroidHeaderIconButton } from "../../components/ui/AndroidScreenHeader";
 import { AppText } from "../../components/ui/AppText";
+import { IconButton } from "../../components/ui/IconButton";
 import { subscribeAppActive } from "../../lib/appState";
 import { reviewCountsTotal } from "../../lib/reviewSession";
 import {
@@ -46,10 +46,12 @@ function WordReviewEntry(props: { readonly environmentId: EnvironmentId }) {
   const due = counts === null ? 0 : reviewCountsTotal(counts);
   return (
     <View>
-      <AndroidHeaderIconButton
+      {/* The Android header's icon button, as AndroidHeaderIconButton draws it, which is Android-only now. */}
+      <IconButton
         accessibilityLabel={due > 0 ? `Review, ${due} due` : "Review"}
         icon="rectangle.stack"
         onPress={() => navigation.navigate("WordReview", { environmentId })}
+        tintColorClassName="accent-header-foreground"
       />
       {due > 0 ? (
         <View
