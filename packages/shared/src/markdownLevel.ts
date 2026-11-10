@@ -191,11 +191,12 @@ function readTwins(tree: HastNode, streaming: boolean) {
 }
 
 /**
- * Renders a tree at `level`: a pair by its threshold (its English twin in a broken message), a lone English twin always,
- * a lone Japanese twin at its threshold and below it as its last sentence mark's translation. In a broken message a
- * hidden Japanese twin also hides all up to the next English twin, so a split span leaves no Japanese behind.
+ * Renders a tree at a word level (`level`, for swapped words) and a sentence level (`sentences`, for twins): a pair by
+ * its threshold (its English twin in a broken message), a lone English twin always, a lone Japanese twin at its
+ * threshold and below it as its last sentence mark's translation. In a broken message a hidden Japanese twin also hides
+ * all up to the next English twin, so a split span leaves no Japanese behind.
  */
-function renderAt(tree: HastNode, level: number, streaming: boolean) {
+function renderAt(tree: HastNode, level: number, sentences: number, streaming: boolean) {
   const { byNode, twins, partners, tails, broken } = readTwins(tree, streaming);
   const paired = new Set(partners.values());
   const nextEnglish = (twin: Twin) =>
@@ -220,9 +221,9 @@ function renderAt(tree: HastNode, level: number, streaming: boolean) {
   };
   function japaneseTwin(twin: Twin): HastNode[] {
     const node = twin.node;
-    if (partners.has(node)) return !broken && level >= twin.on ? [withChildren(node)] : [];
+    if (partners.has(node)) return !broken && sentences >= twin.on ? [withChildren(node)] : [];
     // A Japanese twin a block end closed lost part of itself, so it never shows.
-    if (level >= twin.on && !leftOpen(node, streaming)) return [withChildren(node)];
+    if (sentences >= twin.on && !leftOpen(node, streaming)) return [withChildren(node)];
     if (tails.has(twin)) return [];
     hiddenUntil = broken ? nextEnglish(twin) : null;
     // Hiding, its children keep only an English twin an unclosed span took in, and what follows it.
@@ -236,7 +237,7 @@ function renderAt(tree: HastNode, level: number, streaming: boolean) {
     if (twin?.ja) return japaneseTwin(twin);
     if (twin) {
       if (hiddenUntil === node) hiddenUntil = null;
-      const japaneseShown = paired.has(node) && !broken && level >= twin.on;
+      const japaneseShown = paired.has(node) && !broken && sentences >= twin.on;
       return japaneseShown ? [] : [withChildren(node)];
     }
     if (hiddenUntil !== null) {
@@ -310,8 +311,10 @@ function dropPartialTag(tree: HastNode) {
 }
 
 export interface ChatLevel {
-  /** The chat level, from -3 (no Japanese) to 3. */
+  /** The word level, from -3 (no Japanese) to 3, which swapped words (`<abbr data-on>`) show by. */
   readonly level: number;
+  /** The sentence level, which twins (`<span data-jw data-on>`) show by; `level` when absent. */
+  readonly sentenceLevel?: number;
   /** English only, which also turns glosses in messages without levels into English. */
   readonly englishOnly: boolean;
   /** The source is a reply still streaming, whose last element may still be open. */
@@ -319,17 +322,59 @@ export interface ChatLevel {
 }
 
 /**
- * Renders a chat message at a level. A swapped word (`<abbr data-on>`) stays a gloss at or above its threshold and is
- * its English (`data-en`, else its gloss's meaning) below it; a sentence's twins (`<span data-jw="ja|en" data-on>`)
- * show as `renderAt` says. Markup without a valid `data-on` (-2 to 3) renders as written, except that in English only
- * glossed words show their meaning and glossed sentences their translation, as plain text.
+ * Renders a chat message at its levels. A swapped word (`<abbr data-on>`) stays a gloss at or above its threshold on
+ * the word level and is its English (`data-en`, else its gloss's meaning) below it; a sentence's twins
+ * (`<span data-jw="ja|en" data-on>`) show by the sentence level, as `renderAt` says. Markup without a valid `data-on`
+ * (-2 to 3) renders as written, except that in English only glossed words show their meaning and glossed sentences
+ * their translation, as plain text. Each Japanese element left on screen with a valid `data-p` gets its tint
+ * (`data-tint`, see `markTints`).
  */
-export function rehypeChatLevel({ level, englishOnly, streaming = false }: ChatLevel) {
+export function rehypeChatLevel({
+  level,
+  sentenceLevel,
+  englishOnly,
+  streaming = false,
+}: ChatLevel) {
   return (tree: HastNode) => {
     if (streaming) dropPartialTag(tree);
-    renderAt(tree, level, streaming);
+    renderAt(tree, level, sentenceLevel ?? level, streaming);
     if (englishOnly) toEnglish(tree);
+    else markTints(tree);
   };
+}
+
+// A predicted lookup or translation-open chance, 0 to 1 with at most two decimals, as the weave writes it.
+const PREDICTION = /^(?:0(?:\.\d{1,2})?|1(?:\.0{1,2})?)$/;
+// Steps of 0.05 from 0 (green) to 0.5 and up (red).
+const TINT_STEPS = 10;
+
+/**
+ * The tint of a predicted chance (`data-p`): its step from 0 (green, p = 0) through yellow to 10 (red, p >= 0.5), or
+ * null for anything but a chance the weave writes.
+ */
+export function tintStep(value: unknown): number | null {
+  if (typeof value !== "string" || !PREDICTION.test(value)) return null;
+  return Math.round((Math.min(Number(value), 0.5) / 0.5) * TINT_STEPS);
+}
+
+/** The hue of a tint step: 120 (green) at 0 through 60 (yellow) to 0 (red) at 10. */
+export const tintHue = (step: number) => 120 - (120 * step) / TINT_STEPS;
+
+/**
+ * Marks the tint (`data-tint`, its step) on what shows Japanese and has a valid `data-p`: a level word, a sentence's
+ * Japanese twin, and a glossed word inside one. Run after `renderAt`, so whatever is left is on screen.
+ */
+function markTints(tree: HastNode) {
+  const visit = (node: HastNode, inTwin: boolean) => {
+    if (KEPT.has(node.tagName ?? "")) return;
+    const leveled = threshold(node) !== null;
+    const twin = leveled && node.tagName === "span" && node.properties?.dataJw === "ja";
+    const word = node.tagName === "abbr" && (leveled || inTwin) && JAPANESE.test(textOf(node));
+    const step = twin || word ? tintStep(node.properties?.dataP) : null;
+    if (step !== null) node.properties = { ...node.properties, dataTint: String(step) };
+    for (const child of node.children ?? []) visit(child, inTwin || twin);
+  };
+  visit(tree, false);
 }
 
 const LEVEL_TAG = /<(\/?)(abbr|span)\b([^>]*?)(\/?)>/giu;
