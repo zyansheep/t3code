@@ -14,7 +14,7 @@ type Answer = AsyncResult.AsyncResult<unknown, unknown>;
 const collector = vi.hoisted(() => ({
   status: vi.fn<(request: Request<object>) => Answer>(),
   english: vi.fn<(request: Request<{ on: boolean }>) => Answer>(),
-  step: vi.fn<(request: Request<{ step: 1 | -1 }>) => Answer>(),
+  step: vi.fn<(request: Request<{ step: 1 | -1; surface?: "chat" | "sentences" }>) => Answer>(),
 }));
 vi.mock(import("../../state/annotationInteractions"), async (original) => {
   const command = <I,>(label: string, answer: (request: Request<I>) => Answer) =>
@@ -25,8 +25,10 @@ vi.mock(import("../../state/annotationInteractions"), async (original) => {
     setAnnotationEnglish: command("test:english", (request: Request<{ on: boolean }>) =>
       collector.english(request),
     ),
-    adjustAnnotationIntensity: command("test:step", (request: Request<{ step: 1 | -1 }>) =>
-      collector.step(request),
+    adjustAnnotationIntensity: command(
+      "test:step",
+      (request: Request<{ step: 1 | -1; surface?: "chat" | "sentences" }>) =>
+        collector.step(request),
     ),
   };
 });
@@ -54,9 +56,9 @@ function setup(status: AnnotationStatus) {
     .mockImplementation(({ input }) =>
       AsyncResult.success({ on: input.on, until: input.on ? NOW + 60 * MINUTE : 0, at: NOW }),
     );
-  let level = status.intensity.level;
+  const levels = { chat: status.intensity.level, sentences: status.sentences?.level ?? 0 };
   collector.step.mockReset().mockImplementation(({ input }) => {
-    level += input.step;
+    const level = (levels[input.surface ?? "chat"] += input.step);
     return AsyncResult.success({ level, until: level === 0 ? 0 : NOW + 180 * MINUTE });
   });
 }
@@ -88,7 +90,7 @@ it("shows English only's time left and turns it off and on", async () => {
   await using _screen = await renderPanel("environment-english");
   await expect.element(page.getByRole("heading", { name: "Japanese" })).toBeVisible();
   await expect.element(page.getByText("On · 42 min left")).toBeVisible();
-  const toggle = page.getByRole("switch");
+  const toggle = page.getByRole("switch", { name: /English only/ });
   await expect.element(toggle).toBeChecked();
 
   // The whole row is the switch's label.
@@ -138,4 +140,50 @@ it("steps the level with its chevrons, between much lighter and full", async () 
   await expect.element(heavier).toBeDisabled();
   await expect.element(lighter).toBeEnabled();
   expect(collector.step).toHaveBeenCalledTimes(6);
+});
+
+it("steps the words and the sentences each with their own chevrons, from a collector with both", async () => {
+  using _clock = systemTime(NOW);
+  setup({
+    intensity: { level: 1, until: NOW + 90 * MINUTE },
+    english: { on: false, until: 0, at: 0 },
+    sentences: { level: -1, until: NOW + 30 * MINUTE },
+  });
+  await using _screen = await renderPanel("environment-dials");
+  await expect.element(page.getByText("Words")).toBeVisible();
+  await expect.element(page.getByText("Sentences")).toBeVisible();
+  await expect.element(page.getByText("heavier", { exact: true })).toBeVisible();
+  await expect.element(page.getByText("30 min left")).toBeVisible();
+
+  await userEvent.click(page.getByRole("button", { name: "Lighter sentences" }));
+  await expect.element(page.getByText("much lighter")).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Lighter sentences" })).toBeDisabled();
+  expect(collector.step).toHaveBeenLastCalledWith({
+    environmentId: "environment-dials",
+    input: { step: -1, surface: "sentences" },
+  });
+  // The words' dial stays where it was, and steps the chat level.
+  await expect.element(page.getByText("heavier", { exact: true })).toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: "Heavier words" }));
+  await expect.element(page.getByText("much heavier")).toBeVisible();
+  expect(collector.step).toHaveBeenLastCalledWith({
+    environmentId: "environment-dials",
+    input: { step: 1 },
+  });
+});
+
+it("shows one dial for both from a collector without a sentence level, and the tint switch", async () => {
+  setup({ intensity: { level: 0, until: 0 }, english: { on: false, until: 0, at: 0 } });
+  await using _screen = await renderPanel("environment-one-dial");
+  await expect.element(page.getByText("Difficulty", { exact: true })).toBeVisible();
+  await expect.element(page.getByText("Sentences")).not.toBeInTheDocument();
+  const tint = page.getByRole("switch", { name: "Difficulty tint" });
+  await expect.element(tint).toBeChecked();
+  await userEvent.click(tint);
+  await expect.element(tint).not.toBeChecked();
+  expect(localStorage.getItem("t3.japaneseTint")).toBe("off");
+  await userEvent.click(tint);
+  await expect.element(tint).toBeChecked();
+  expect(localStorage.getItem("t3.japaneseTint")).toBeNull();
+  expect(collector.step).not.toHaveBeenCalled();
 });
