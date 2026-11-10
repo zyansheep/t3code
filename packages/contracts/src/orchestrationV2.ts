@@ -4357,10 +4357,16 @@ export const OrchestrationV2SearchThreadInput = Schema.Struct({
     ).check(Schema.isMaxLength(1_000)),
   ),
   query: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
-  /** The chat Japanese level the client renders replies at, so find counts only the words it shows. */
+  /**
+   * The chat Japanese levels the client renders replies at, so find counts only the words it shows: `level` for words,
+   * `sentenceLevel` (absent: `level`) for sentences.
+   */
   chatLevel: Schema.optionalKey(
     Schema.Struct({
       level: Schema.Int.check(Schema.isBetween({ minimum: -3, maximum: 3 })),
+      sentenceLevel: Schema.optionalKey(
+        Schema.Int.check(Schema.isBetween({ minimum: -3, maximum: 3 })),
+      ),
       englishOnly: Schema.Boolean,
     }),
   ),
