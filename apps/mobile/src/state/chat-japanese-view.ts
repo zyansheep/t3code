@@ -36,6 +36,18 @@ export const chatJapaneseLevelAtom = Atom.family((environmentId: EnvironmentId) 
   }).pipe(Atom.withLabel("mobile:annotation-chat-level")),
 );
 
+/**
+ * The level chat from this environment renders its twins at: the collector's sentence level, its word level when it has
+ * one level for both, -3 while English only is on, normal until known or with no collector.
+ */
+export const chatJapaneseSentenceLevelAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => {
+    const status = get(annotationStatusAtom(environmentId));
+    if (status === null) return 0;
+    return status.english.on ? ENGLISH_ONLY_LEVEL : (status.sentences ?? status.intensity).level;
+  }).pipe(Atom.withLabel("mobile:annotation-sentence-level")),
+);
+
 /** Anki's three counts the review cards last came with, for the badge; null until known. */
 export const reviewCountsAtom = Atom.family((_environmentId: EnvironmentId) =>
   Atom.make<ReviewCounts | null>(null).pipe(Atom.keepAlive, Atom.withLabel("mobile:review-counts")),

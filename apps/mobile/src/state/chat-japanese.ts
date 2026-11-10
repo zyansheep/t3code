@@ -1,4 +1,9 @@
-import type { AnnotationEnglish, AnnotationStatus, EnvironmentId } from "@t3tools/contracts";
+import type {
+  AnnotationEnglish,
+  AnnotationIntensity,
+  AnnotationStatus,
+  EnvironmentId,
+} from "@t3tools/contracts";
 import { WS_METHODS } from "@t3tools/contracts";
 import {
   type AtomCommandResult,
@@ -51,6 +56,7 @@ interface Watched {
   attemptedAt: number;
   expiry: ReturnType<typeof setTimeout> | null;
   levelExpiry: ReturnType<typeof setTimeout> | null;
+  sentenceExpiry: ReturnType<typeof setTimeout> | null;
   /** Presses applied so far: a status read that started before the latest one is out of date when it answers. */
   presses: number;
 }
@@ -67,6 +73,7 @@ function entry(environmentId: EnvironmentId): Watched {
       attemptedAt: 0,
       expiry: null,
       levelExpiry: null,
+      sentenceExpiry: null,
       presses: 0,
     };
     watched.set(environmentId, watch);
@@ -75,31 +82,35 @@ function entry(environmentId: EnvironmentId): Watched {
 }
 
 /**
- * Stores a status and, without waiting for the next refresh, turns English only off and the level back to normal
+ * Stores a status and, without waiting for the next refresh, turns English only off and each level back to normal
  * locally when they end, so chat renders as the collector has it.
  */
 function setStatus(environmentId: EnvironmentId, status: AnnotationStatus | null) {
   const watch = entry(environmentId);
   if (watch.expiry) clearTimeout(watch.expiry);
   if (watch.levelExpiry) clearTimeout(watch.levelExpiry);
+  if (watch.sentenceExpiry) clearTimeout(watch.sentenceExpiry);
   watch.expiry = null;
   watch.levelExpiry = null;
-  const intensity = status?.intensity;
-  if (status && intensity && intensity.level !== 0 && intensity.until > 0) {
-    const left = intensity.until - Date.now();
+  watch.sentenceExpiry = null;
+  for (const dial of ["intensity", "sentences"] as const) {
+    const level = status?.[dial];
+    if (!status || !level || level.level === 0 || level.until <= 0) continue;
+    const left = level.until - Date.now();
+    const timer = dial === "intensity" ? "levelExpiry" : "sentenceExpiry";
     if (left <= 0) {
-      status = { ...status, intensity: { level: 0, until: 0 } };
-    } else {
-      watch.levelExpiry = setTimeout(
-        () => {
-          watch.levelExpiry = null;
-          const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
-          if (current?.intensity.until !== intensity.until) return;
-          setStatus(environmentId, { ...current, intensity: { level: 0, until: 0 } });
-        },
-        Math.min(left, MAX_TIMEOUT_MS),
-      );
+      status = { ...status, [dial]: { level: 0, until: 0 } };
+      continue;
     }
+    watch[timer] = setTimeout(
+      () => {
+        watch[timer] = null;
+        const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
+        if (!current || current[dial]?.until !== level.until) return;
+        setStatus(environmentId, { ...current, [dial]: { level: 0, until: 0 } });
+      },
+      Math.min(left, MAX_TIMEOUT_MS),
+    );
   }
   const english = status?.english;
   if (status && english?.on && english.until > 0) {
@@ -229,21 +240,23 @@ export async function setEnglishOnly(
   }
   const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
   applyPress(environmentId, {
+    ...current,
     intensity: current?.intensity ?? { level: 0, until: 0 },
     english: result.value,
   });
   return { ok: true, value: result.value };
 }
 
-/** Steps the chat level by one through the collector and keeps its answer. */
+/** Steps the word level (`chat`) or the sentence level (`sentences`) by one through the collector and keeps its answer. */
 export async function stepAnnotationLevel(
   environmentId: EnvironmentId,
   step: 1 | -1,
-): Promise<ChatJapaneseChange<AnnotationStatus["intensity"]> | null> {
+  surface: "chat" | "sentences" = "chat",
+): Promise<ChatJapaneseChange<AnnotationIntensity> | null> {
   const result = await runAtomCommand(
     appAtomRegistry,
     adjustAnnotationIntensity,
-    { environmentId, input: { step } },
+    { environmentId, input: surface === "chat" ? { step } : { step, surface } },
     { reportFailure: false, reportDefect: false },
   );
   if (result._tag !== "Success") {
@@ -251,9 +264,17 @@ export async function stepAnnotationLevel(
     return reason === null ? null : { ok: false, reason };
   }
   const current = appAtomRegistry.get(annotationStatusAtom(environmentId));
-  applyPress(environmentId, {
-    english: current?.english ?? { on: false, until: 0, at: 0 },
-    intensity: result.value,
-  });
+  const english = current?.english ?? { on: false, until: 0, at: 0 };
+  applyPress(
+    environmentId,
+    surface === "chat"
+      ? { ...current, english, intensity: result.value }
+      : {
+          ...current,
+          english,
+          intensity: current?.intensity ?? result.value,
+          sentences: result.value,
+        },
+  );
   return { ok: true, value: result.value };
 }

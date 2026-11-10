@@ -175,6 +175,8 @@ export interface Preferences {
   readonly workingShelfEnabled?: boolean;
   /** The kind of question the Workflows tab's Needs you list was last narrowed to. */
   readonly workflowQuestionKind?: string;
+  /** Unset means on: chat Japanese is tinted by how hard it is predicted to be. */
+  readonly chatJapaneseTintEnabled?: boolean;
   readonly useLastProjectForNewThreads?: boolean;
   readonly lastThreadProject?: typeof ThreadProject.Type;
   readonly modelFavorites?: ReadonlyArray<{
@@ -268,6 +270,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     toolCallVisibility?: ToolCallVisibility;
     workingShelfEnabled?: boolean;
     workflowQuestionKind?: string;
+    chatJapaneseTintEnabled?: boolean;
     useLastProjectForNewThreads?: boolean;
     lastThreadProject?: typeof ThreadProject.Type;
     modelFavorites?: Preferences["modelFavorites"];
@@ -418,6 +421,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.workflowQuestionKind === "string") {
     preferences.workflowQuestionKind = parsed.workflowQuestionKind;
+  }
+  if (typeof parsed.chatJapaneseTintEnabled === "boolean") {
+    preferences.chatJapaneseTintEnabled = parsed.chatJapaneseTintEnabled;
   }
   if (typeof parsed.useLastProjectForNewThreads === "boolean") {
     preferences.useLastProjectForNewThreads = parsed.useLastProjectForNewThreads;
