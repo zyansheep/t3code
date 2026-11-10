@@ -134,7 +134,8 @@ export function useChatJapaneseActions(environmentId: EnvironmentId): ReadonlyAr
       icon: "paintbrush",
       overflowOnly: true,
       selected: tinted,
-      subtitle: tinted ? "On, on this phone" : "Off, on this phone",
+      // Words only: a tinted sentence would be a link, which Android's long press can't select.
+      subtitle: tinted ? "On for words, on this phone" : "Off, on this phone",
       onPress: () => setChatJapaneseTintEnabled(!tinted),
     },
   ];
