@@ -503,6 +503,10 @@
       "types": "./src/markdownLevel.ts",
       "import": "./src/markdownLevel.ts"
     },
+    "./japaneseTint": {
+      "types": "./src/japaneseTint.ts",
+      "import": "./src/japaneseTint.ts"
+    },
     "./threadFindText": {
       "types": "./src/threadFindText.ts",
       "import": "./src/threadFindText.ts"
