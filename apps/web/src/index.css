@@ -1890,6 +1890,58 @@ code {
   margin: 0;
 }
 
+/* Chat Japanese tinted by how likely the reader is to look it up (data-tint, from data-p): green at 0 through yellow
+   to red from 0.5. A sentence's Japanese twin is fainter than the words in it. */
+.chat-markdown [data-tint="0"] {
+  --japanese-tint-hue: 120;
+}
+.chat-markdown [data-tint="1"] {
+  --japanese-tint-hue: 108;
+}
+.chat-markdown [data-tint="2"] {
+  --japanese-tint-hue: 96;
+}
+.chat-markdown [data-tint="3"] {
+  --japanese-tint-hue: 84;
+}
+.chat-markdown [data-tint="4"] {
+  --japanese-tint-hue: 72;
+}
+.chat-markdown [data-tint="5"] {
+  --japanese-tint-hue: 60;
+}
+.chat-markdown [data-tint="6"] {
+  --japanese-tint-hue: 48;
+}
+.chat-markdown [data-tint="7"] {
+  --japanese-tint-hue: 36;
+}
+.chat-markdown [data-tint="8"] {
+  --japanese-tint-hue: 24;
+}
+.chat-markdown [data-tint="9"] {
+  --japanese-tint-hue: 12;
+}
+.chat-markdown [data-tint="10"] {
+  --japanese-tint-hue: 0;
+}
+.chat-markdown[data-japanese-tint] [data-tint] {
+  border-radius: 0.2em;
+  background-color: hsl(var(--japanese-tint-hue) 90% 45% / 0.2);
+  box-decoration-break: clone;
+
+  @variant dark {
+    background-color: hsl(var(--japanese-tint-hue) 80% 55% / 0.24);
+  }
+}
+.chat-markdown[data-japanese-tint] span[data-tint] {
+  background-color: hsl(var(--japanese-tint-hue) 90% 45% / 0.08);
+
+  @variant dark {
+    background-color: hsl(var(--japanese-tint-hue) 80% 55% / 0.1);
+  }
+}
+
 :is(.chat-markdown, .composer-tiptap) h1,
 :is(.chat-markdown, .composer-tiptap) h2,
 :is(.chat-markdown, .composer-tiptap) h3,
