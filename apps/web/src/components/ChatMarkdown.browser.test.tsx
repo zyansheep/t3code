@@ -174,7 +174,11 @@ import ChatMarkdown from "./ChatMarkdown";
 import { chatMarkdownClipboardPayload } from "../markdown-clipboard";
 import { AppAtomRegistryProvider, appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
-import { annotationStatusAtom, stepAnnotationLevel } from "../state/annotationStatus";
+import {
+  annotationStatusAtom,
+  setJapaneseTint,
+  stepAnnotationLevel,
+} from "../state/annotationStatus";
 import { flush as flushReading, visibleReadingContexts } from "../lib/annotationReading";
 import { installChatRouteCommands } from "../shortcuts/chatRouteCommands";
 import { ThreadJapanesePanel } from "./chat/ThreadJapanesePanel";
@@ -1114,5 +1118,52 @@ describe("ChatMarkdown levels", () => {
     expect(items.filter((item) => item.kind === "shown")).toEqual([
       expect.objectContaining({ level: 1 }),
     ]);
+  });
+  it("renders twins at the sentence level, reports it beside the word level, and splits its showings by both", async () => {
+    setup();
+    const levels = (level: number, sentences: number) =>
+      appAtomRegistry.set(annotationStatusAtom(ENGLISH_ENVIRONMENT), {
+        intensity: { level, until: 0 },
+        english: { on: false, until: 0, at: 0 },
+        sentences: { level: sentences, until: 0 },
+      });
+    levels(0, 2);
+    await using screen = await renderMessages(
+      LEVELED.replace('data-on="1"', 'data-on="1" data-p="0.4"'),
+    );
+    const paragraph = screen.container.querySelector("p")!;
+    const items = (kind: string) => {
+      flushReading();
+      const found = annotationReport.mock.calls
+        .flatMap(
+          ([report]) => (report as { input: { items: Array<{ kind: string }> } }).input.items,
+        )
+        .filter((item) => item.kind === kind);
+      annotationReport.mockClear();
+      return found;
+    };
+    expect(paragraph.textContent).toBe("The problem is small. 雨です。");
+    await vi.waitFor(() => expect(visibleReadingContexts()).toHaveLength(1));
+    expect(items("shown")).toEqual([expect.objectContaining({ level: 0, sentenceLevel: 2 })]);
+
+    // A change of either dial is another showing, and equal dials report the word level alone.
+    await act(() => levels(2, 2));
+    await vi.waitFor(() => expect(paragraph.textContent).toBe("The 問題 is small. 雨です。"));
+    await vi.waitFor(() => expect(items("shown")).toEqual([expect.objectContaining({ level: 2 })]));
+    expect(items("shown")).toEqual([]);
+    await act(() => levels(2, -1));
+    await vi.waitFor(() => expect(paragraph.textContent).toBe("The 問題 is small. It is 雨."));
+    await vi.waitFor(() =>
+      expect(items("shown")).toEqual([expect.objectContaining({ level: 2, sentenceLevel: -1 })]),
+    );
+
+    // The word's tint shows while the tint is on in this browser.
+    const root = screen.container.querySelector(".chat-markdown")!;
+    expect(paragraph.querySelector("abbr")!.getAttribute("data-tint")).toBe("8");
+    expect(root.hasAttribute("data-japanese-tint")).toBe(true);
+    await act(() => setJapaneseTint(false));
+    expect(root.hasAttribute("data-japanese-tint")).toBe(false);
+    await act(() => setJapaneseTint(true));
+    expect(root.hasAttribute("data-japanese-tint")).toBe(true);
   });
 });
