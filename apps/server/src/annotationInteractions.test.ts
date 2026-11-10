@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  type AnnotationIntensityAdjustInput,
   AnnotationInteractionsReportInput,
   type AnnotationReviewNextInput,
 } from "@t3tools/contracts";
@@ -80,6 +81,7 @@ describe("forwardAnnotationInteractions", () => {
         box: [0, 0, 0, 0],
         annotations: [["mondai", 0, 0]],
         level: -2,
+        sentenceLevel: 1,
         uid: "phone-s1-1",
       } as const;
       const { requests, run } = forwardWith(
@@ -230,6 +232,7 @@ describe("forwardAnnotationInteractions", () => {
 const adjustWith = (
   env: Record<string, string>,
   answer: { readonly status: number; readonly body: unknown } | null,
+  input: AnnotationIntensityAdjustInput = { step: -1 },
 ) => {
   const requests: Array<{
     readonly url: string;
@@ -255,7 +258,7 @@ const adjustWith = (
           ),
         );
   });
-  const run = adjustAnnotationIntensity({ step: -1 }).pipe(
+  const run = adjustAnnotationIntensity(input).pipe(
     Effect.provideService(HttpClient.HttpClient, client),
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
   );
@@ -280,6 +283,22 @@ describe("adjustAnnotationIntensity", () => {
           body: JSON.stringify({ surface: "chat", step: -1, source: "t3" }),
         },
       ]);
+    }),
+  );
+
+  it.effect("steps the sentences when asked, and answers with their level", () =>
+    Effect.gen(function* () {
+      const until = 1_800_000_600_000;
+      const { requests, run } = adjustWith(
+        configured,
+        { status: 200, body: { ok: true, intensity: { level: 2, until, at: 1_800_000_000_000 } } },
+        { step: 1, surface: "sentences" },
+      );
+      assert.deepStrictEqual(yield* run, { level: 2, until });
+      assert.deepStrictEqual(
+        requests.map((request) => request.body),
+        [JSON.stringify({ surface: "sentences", step: 1, source: "t3" })],
+      );
     }),
   );
 
@@ -506,6 +525,29 @@ describe("getAnnotationStatus", () => {
         { method: "GET", url: "http://collector.test:7853/v1/intensity?surface=chat", body: "" },
       ]);
     }),
+  );
+
+  it.effect(
+    "reads the sentence level beside the word level, and none from a collector with one",
+    () =>
+      Effect.gen(function* () {
+        const english = { on: false, until: 0, at: 0 };
+        const sentences = { level: -1, until: 1_800_000_900_000, at: 1_800_000_000_000 };
+        const two = collectorWith(getAnnotationStatus(), configured, {
+          status: 200,
+          body: { ok: true, intensity, english, sentences },
+        });
+        assert.deepStrictEqual(yield* two.run, {
+          intensity: { level: 1, until: 1_800_000_600_000 },
+          english,
+          sentences: { level: -1, until: 1_800_000_900_000 },
+        });
+        const one = collectorWith(getAnnotationStatus(), configured, {
+          status: 200,
+          body: { ok: true, intensity, english },
+        });
+        assert.notProperty(yield* one.run, "sentences");
+      }),
   );
 
   it.effect("reads English only as off from a collector that predates it", () =>
