@@ -21,9 +21,15 @@ vi.mock(import("./annotationInteractions"), async (original) => ({
     run: async (_registry: unknown, request: { input: { on: boolean } }) =>
       AsyncResult.success({ on: request.input.on, until: NOW + HOUR, at: NOW }),
   } as never,
+  // The words go to much heavier for three hours, the sentences to lighter for two.
   adjustAnnotationIntensity: {
     label: "test:step",
-    run: async () => AsyncResult.success({ level: 2, until: NOW + 3 * HOUR }),
+    run: async (_registry: unknown, request: { input: { surface?: string } }) =>
+      AsyncResult.success(
+        request.input.surface === "sentences"
+          ? { level: -1, until: NOW + 2 * HOUR }
+          : { level: 2, until: NOW + 3 * HOUR },
+      ),
   } as never,
 }));
 
@@ -32,6 +38,7 @@ import {
   annotationStatusAtom,
   chatLevelAtom,
   refreshAnnotationStatus,
+  sentenceLevelAtom,
   setEnglishOnly,
   stepAnnotationLevel,
 } from "./annotationStatus";
@@ -99,4 +106,34 @@ it("drops a status read that started before a press, and reads again", async () 
   expect(reads).toHaveLength(2);
   reads[1]!(status(2, true));
   await vi.waitFor(() => expect(level()).toBe(-3));
+});
+
+it("renders twins at the sentence level, or the word level without one, and ends each on its own", async () => {
+  vi.useFakeTimers({ now: NOW, toFake: ["setTimeout", "clearTimeout", "Date"] });
+  using _timers = { [Symbol.dispose]: () => void vi.useRealTimers() };
+  const environmentId = EnvironmentId.make("environment-sentences");
+  appAtomRegistry.set(annotationStatusAtom(environmentId), status(0, false));
+  const levels = () => [
+    appAtomRegistry.get(chatLevelAtom(environmentId)),
+    appAtomRegistry.get(sentenceLevelAtom(environmentId)),
+  ];
+  // A collector with one level for both: the sentences follow the words.
+  await stepAnnotationLevel(environmentId, 1);
+  expect(levels()).toEqual([2, 2]);
+  await stepAnnotationLevel(environmentId, -1, "sentences");
+  expect(levels()).toEqual([2, -1]);
+  // English only is both at -3, and keeps each level for after it.
+  await setEnglishOnly(environmentId, true);
+  expect(levels()).toEqual([-3, -3]);
+
+  vi.advanceTimersByTime(HOUR);
+  expect(levels()).toEqual([2, -1]);
+  vi.advanceTimersByTime(HOUR);
+  expect(levels()).toEqual([2, 0]);
+  vi.advanceTimersByTime(HOUR);
+  expect(levels()).toEqual([0, 0]);
+  expect(appAtomRegistry.get(annotationStatusAtom(environmentId))?.sentences).toEqual({
+    level: 0,
+    until: 0,
+  });
 });
