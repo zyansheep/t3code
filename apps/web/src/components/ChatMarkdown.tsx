@@ -173,6 +173,8 @@ import {
   annotationStatusKnownAtom,
   chatLevelAtom,
   englishOnlyAtom,
+  japaneseTintAtom,
+  sentenceLevelAtom,
   watchAnnotationStatus,
 } from "../state/annotationStatus";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
@@ -237,7 +239,7 @@ import { MarkdownExternalLinkContent } from "./chat/MarkdownExternalLink";
 import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 import { canUseMarkdownFileShellActions } from "./chat/MarkdownFileLink.logic";
 import { handleMarkdownFragmentClick } from "./chat/markdownFragments";
-import { rehypeChatLevel } from "@t3tools/shared/markdownLevel";
+import { type ChatLevel, rehypeChatLevel } from "@t3tools/shared/markdownLevel";
 import { hastHasText, hastPlainTextDeep, plainHastText } from "./chat/markdownHast.logic";
 import {
   extractCodeBlock,
@@ -455,17 +457,14 @@ function safeUrl(value: string): string {
     : "";
 }
 
-// After heading ids, so links to a heading keep working in English.
-const chatLevelTransform = (level: number, englishOnly: boolean, streaming: boolean) =>
-  rehypeChatLevel({ level, englishOnly, streaming });
-
-// One transform per chat level and English only, finished or streaming, so each keeps its renderer and parse cache.
-const levelTransforms = new Map<string, ReturnType<typeof chatLevelTransform>>();
-function levelTransform(level: number, englishOnly: boolean, streaming: boolean) {
-  const key = `${level} ${englishOnly} ${streaming}`;
+// Chat levels run after heading ids, so links to a heading keep working in English. One transform per pair of levels
+// and English only, finished or streaming, so each keeps its renderer and parse cache.
+const levelTransforms = new Map<string, ReturnType<typeof rehypeChatLevel>>();
+function levelTransform(options: Required<ChatLevel>) {
+  const { level, sentenceLevel, englishOnly, streaming } = options;
+  const key = `${level} ${sentenceLevel} ${englishOnly} ${streaming}`;
   let transform = levelTransforms.get(key);
-  if (!transform)
-    levelTransforms.set(key, (transform = chatLevelTransform(level, englishOnly, streaming)));
+  if (!transform) levelTransforms.set(key, (transform = rehypeChatLevel(options)));
   return transform;
 }
 
@@ -1195,7 +1194,7 @@ function openedAbbreviation(
   container: HTMLElement,
   trigger: Element,
   text: string,
-  level: number | undefined,
+  levels: ReportedLevels,
 ) {
   const { triggers, place } = describeAnnotations(container);
   const position = triggers.findIndex((entry) => entry.trigger === trigger);
@@ -1206,10 +1205,13 @@ function openedAbbreviation(
     view: ANNOTATION_VIEW,
     context: annotationContext(text),
     position,
-    ...(level === undefined ? {} : { level }),
+    ...levels,
     ...place,
   };
 }
+
+/** The levels a message with levels reports it was rendered at: words, and sentences when they differ. */
+type ReportedLevels = { readonly level?: number; readonly sentenceLevel?: number };
 
 interface OpenAbbreviation {
   readonly trigger: Element;
@@ -2252,18 +2254,26 @@ function ChatMarkdown({
   // In English only, glosses render as plain English, so nothing in the message is Japanese to report on.
   const englishOnly = useAtomValue(englishOnlyAtom(annotated ? environmentId : null));
   const level = useAtomValue(chatLevelAtom(hasLevels ? environmentId : null));
-  // Reports from a message with levels carry the one it is rendered at.
+  const sentenceLevel = useAtomValue(sentenceLevelAtom(hasLevels ? environmentId : null));
+  const tinted = useAtomValue(japaneseTintAtom);
+  // Reports from a message with levels carry the ones it is rendered at, the sentence level when it differs.
   const reportedLevel = hasLevels ? level : undefined;
+  const reportedSentenceLevel = hasLevels && sentenceLevel !== level ? sentenceLevel : undefined;
+  const reportedLevels: ReportedLevels = {
+    ...(reportedLevel === undefined ? {} : { level: reportedLevel }),
+    ...(reportedSentenceLevel === undefined ? {} : { sentenceLevel: reportedSentenceLevel }),
+  };
   const glossed = hasAbbreviations && !englishOnly;
   const blockMarkdown = (index: number) =>
     parseRawHtml && ((annotated && englishOnly) || hasLevels || isWriting(index))
       ? wordsOptions(extensions, {
           ...markdownFlags,
-          transform: levelTransform(
-            englishOnly ? -3 : hasLevels ? level : 0,
+          transform: levelTransform({
+            level: englishOnly ? -3 : hasLevels ? level : 0,
+            sentenceLevel: englishOnly ? -3 : hasLevels ? sentenceLevel : 0,
             englishOnly,
-            isWriting(index),
-          ),
+            streaming: isWriting(index),
+          }),
         })
       : markdown;
   // A message with levels reports only once its server's level is known, never at a guessed one.
@@ -2286,9 +2296,18 @@ function ChatMarkdown({
       view: ANNOTATION_VIEW,
       context: annotationContext(text),
       ...(reportedLevel === undefined ? {} : { level: reportedLevel }),
+      ...(reportedSentenceLevel === undefined ? {} : { sentenceLevel: reportedSentenceLevel }),
       report: (items) => reportReading(items),
     });
-  }, [reporting, environmentId, isStreaming, markdownRef, text, reportedLevel]);
+  }, [
+    reporting,
+    environmentId,
+    isStreaming,
+    markdownRef,
+    text,
+    reportedLevel,
+    reportedSentenceLevel,
+  ]);
   const finishAbbreviation = () => {
     const open = openAbbreviation.current;
     openAbbreviation.current = null;
@@ -2323,7 +2342,9 @@ function ChatMarkdown({
       at: Date.now(),
       kind,
       opened:
-        reporting && container ? openedAbbreviation(container, trigger, text, reportedLevel) : null,
+        reporting && container
+          ? openedAbbreviation(container, trigger, text, reportedLevels)
+          : null,
     };
   };
 
@@ -2339,6 +2360,7 @@ function ChatMarkdown({
       data-streaming={
         componentState.isStreaming && (!remounted || text !== textAtMount) ? "" : undefined
       }
+      data-japanese-tint={hasLevels && tinted && !englishOnly ? "" : undefined}
       onCopy={handleCopy}
     >
       <ChatMarkdownRendererContext value={componentState}>

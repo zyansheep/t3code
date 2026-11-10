@@ -40,8 +40,10 @@ export interface ReadingMessage {
   readonly container: HTMLElement;
   readonly view: string;
   readonly context: string;
-  /** The chat level the message is rendered at, for one with levels; a new level registers it again. */
+  /** The word level the message is rendered at, for one with levels; a new level registers it again. */
   readonly level?: number;
+  /** Its sentence level, when it differs from `level`; a new one registers it again too. */
+  readonly sentenceLevel?: number;
   readonly report: Report;
 }
 
@@ -171,8 +173,8 @@ const inView = new Set<Element>();
 const stays = new Map<Element, BlockStay>();
 const playing = new Set<HTMLMediaElement>();
 const queue = new Map<Report, AnnotationReading[]>();
-// View, context and level of each message sent as shown, so a remount doesn't resend it; each level of a message with
-// levels shows other words, so it has its own.
+// View, context and levels of each message sent as shown, so a remount doesn't resend it; each pair of word and sentence
+// levels of a message with levels shows other words, so it has its own.
 const shown = new Set<string>();
 let observer: IntersectionObserver | null = null;
 let listening = false;
@@ -226,8 +228,15 @@ function ownerOf(target: EventTarget | null): Registered | null {
 }
 
 function base(message: Registered, at: number, place: Place) {
-  const { view, context, level } = message;
-  return { at, view, context, ...(level === undefined ? {} : { level }), ...place };
+  const { view, context, level, sentenceLevel } = message;
+  return {
+    at,
+    view,
+    context,
+    ...(level === undefined ? {} : { level }),
+    ...(sentenceLevel === undefined ? {} : { sentenceLevel }),
+    ...place,
+  };
 }
 
 function onClick(event: MouseEvent) {
@@ -348,7 +357,7 @@ function startStay(block: Element) {
   };
   stays.set(block, { ...newStay(now), message, snapshot });
   ticker ??= setInterval(tick, 1_000);
-  const key = `${message.view} ${message.context} ${message.level ?? ""}`;
+  const key = `${message.view} ${message.context} ${message.level ?? ""} ${message.sentenceLevel ?? ""}`;
   if (shown.has(key)) return;
   shown.add(key);
   const words = Math.min(countWords(message.container), SHOWN_MAX_WORDS);
