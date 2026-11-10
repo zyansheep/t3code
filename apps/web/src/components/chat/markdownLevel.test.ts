@@ -149,6 +149,22 @@ describe("rehypeChatLevel", () => {
     expect(textAt(source, 1)).toBe("The 問題 is small.");
   });
 
+  it("keeps a valid prediction past the sanitizer, and tints by it", () => {
+    const source =
+      '<abbr title="もんだい · problem" data-en="problem" data-on="0" data-p="0.25">問題</abbr> ' +
+      '<abbr title="いま · now" data-en="now" data-on="0" data-p="2">今</abbr> ' +
+      '<span data-jw="ja" data-on="0" data-p="0.5"><abbr title="あめ · rain" data-p="0.05">雨</abbr></span><span data-jw="en" data-on="0" data-p="0.5">rain</span>';
+    expect(html(source, 0)).toBe(
+      '<p><abbr data-en="problem" data-on="0" data-p="0.25" data-markdown-title="もんだい · problem" data-tint="5">問題</abbr> ' +
+        '<abbr data-en="now" data-on="0" data-markdown-title="いま · now">今</abbr> ' +
+        '<span data-jw="ja" data-on="0" data-p="0.5" data-tint="10"><abbr data-p="0.05" data-markdown-title="あめ · rain" data-tint="1">雨</abbr></span></p>',
+    );
+    // A tint written into the message never passes.
+    expect(html('<abbr title="あ" data-on="0" data-tint="3">今</abbr>', 0)).not.toContain(
+      "data-tint",
+    );
+  });
+
   it("keeps only well-formed level markup past the sanitizer", () => {
     const source =
       '<span data-jw="ja" data-on="x" onclick="alert(1)">今日</span><span data-jw="zz" data-on="1">today</span>';
