@@ -11,6 +11,7 @@ type NextInput = {
   readonly exclude: ReadonlyArray<string>;
   readonly more?: boolean;
   readonly peek?: boolean;
+  readonly newPerDay?: number;
 };
 
 // The collector, through the client's own server: each command answers from its mock.
@@ -192,6 +193,35 @@ it("leaves keys typed in the composer alone", async () => {
   await expect.element(composer).toHaveValue(" 3\n");
   expect(document.body.textContent).not.toContain("problem");
   await expect.element(page.getByRole("button", { name: "Show answer" })).toBeVisible();
+  expect(reviews()).toEqual([]);
+});
+
+it("sets new cards a day from its menu, where keys typed grade nothing", async () => {
+  setup();
+  let limit = 10;
+  collector.next.mockImplementation(({ input }) => {
+    if (input.newPerDay !== undefined) limit = input.newPerDay;
+    const counts = { new: 1, learning: 0, review: 0 };
+    return collector.next.mock.calls.length === 1
+      ? { card: MONDAI, counts, newPerDay: limit }
+      : { card: null, counts, newPerDay: limit };
+  });
+  await using _screen = await render(renderPanel());
+  await expectCardShown("問題");
+  await userEvent.click(page.getByRole("button", { name: "Show answer" }));
+  await userEvent.click(page.getByRole("button", { name: "Review settings" }));
+  const field = page.getByLabelText("New cards a day");
+  await expect.element(field).toHaveValue("10");
+  await userEvent.clear(field);
+  await userEvent.type(field, "25{Enter}");
+  await vi.waitFor(() =>
+    expect(collector.next).toHaveBeenCalledWith({
+      environmentId: "environment-review",
+      input: { source: "desktop", exclude: [], peek: true, newPerDay: 25 },
+    }),
+  );
+  await expect.element(field).toHaveValue("25");
+  await expect.element(page.getByText("problem")).toBeVisible();
   expect(reviews()).toEqual([]);
 });
 

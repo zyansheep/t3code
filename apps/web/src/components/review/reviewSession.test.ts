@@ -330,6 +330,45 @@ describe("ReviewSession", () => {
     expect((await h.ask(1)).input).toEqual({ exclude: [], more: false });
   });
 
+  it("sets new cards a day with a peek, takes its counts, and asks again for what the old limit decided", async () => {
+    const h = harness();
+    h.session.start();
+    await h.answer(await h.ask(0), { card: null, counts: { new: 0, learning: 0, review: 0 } });
+    expect(h.state().view).toEqual({ phase: "done" });
+
+    const raised = h.session.setNewPerDay(20);
+    const peek = await h.ask(1);
+    expect(peek.input).toEqual({ exclude: [], more: false, peek: true, newPerDay: 20 });
+    const reply = { card: null, counts: { new: 10, learning: 0, review: 0 }, newPerDay: 20 };
+    peek.answer(reply);
+    expect(await raised).toEqual(reply);
+    // The day was done, and the new limit lets new cards in.
+    expect(h.state()).toEqual({ view: { phase: "loading" }, counts: reply.counts });
+    await h.answer(await h.ask(2), { card: A, counts: reply.counts });
+
+    // With a card on screen, the next card, served under the old limit, is handed back and asked for again.
+    await h.answer(await h.ask(3), { card: B, counts: reply.counts });
+    const lowered = h.session.setNewPerDay(0);
+    (await h.ask(4)).answer({
+      card: null,
+      counts: { new: 0, learning: 0, review: 1 },
+      newPerDay: 0,
+    });
+    await lowered;
+    expect(h.released).toEqual(["b"]);
+    expect(h.state()).toMatchObject({
+      view: { phase: "card", card: A },
+      counts: { new: 0, learning: 0, review: 1 },
+    });
+    expect((await h.ask(5)).input).toEqual({ exclude: ["a"], more: false });
+
+    // A refused setting changes nothing.
+    const refused = h.session.setNewPerDay(5);
+    (await h.ask(6)).answer({ detail: "collector unreachable" });
+    expect(await refused).toEqual({ detail: "collector unreachable" });
+    expect(h.state().view).toMatchObject({ phase: "card", card: A });
+  });
+
   it("shows the collector's error, and works with a collector that sends no counts or intervals", async () => {
     const h = harness();
     h.session.start();
