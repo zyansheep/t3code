@@ -24,6 +24,7 @@ Add a second Claude instance in **Settings → Providers** (or **Add Claude acco
 - **Idle compaction (>200k tokens)**: Configure **Settings → Providers → Advanced → Compact idle threads** (overridable per instance):
   - **When you return** (default): Shows a **Compact** chip next to Send once Claude's prompt cache expires (~1 hour on subscriptions, 5 min on API/Bedrock/Vertex). Click it to switch to **Keep** if you want full history.
   - **Before the cache expires (beta)**: Automatically sends `/compact` shortly before the cache expires while history is still cached (falls back to **When you return** if missed).
+  - **Right after each turn (beta)**: Sends `/compact` as soon as a turn ends, while history is still cached, so the next message starts from the summary instead of re-reading the full history. Trades away detail a follow-up might want for a smaller context on the next task (falls back to **When you return** if it doesn't run).
   - **Never**: Disables idle compaction prompts.
 
 ## Steering, usage limits, and tasks
