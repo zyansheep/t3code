@@ -227,11 +227,18 @@ export class AnnotationIntensityError extends Schema.TaggedError<AnnotationInten
   }
 }
 
+/** The most new review cards a day a reader can set. */
+export const ANNOTATION_REVIEW_NEW_PER_DAY_MAX = 200;
+
+/** New review cards a day: 0 (reviews only) to `ANNOTATION_REVIEW_NEW_PER_DAY_MAX`. */
+export const AnnotationReviewNewPerDay = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: ANNOTATION_REVIEW_NEW_PER_DAY_MAX }),
+);
+
 /**
- * Asks the collector for the next card to review; `exclude` holds the ids of cards the client already has, `more`
- * (Review more, once the day is done) ignores today's new-card limit for this request, `peek` asks for the counts
- * alone, with no card served or recorded, and `release` names cards served to this client but never shown, so the
- * collector can serve them again at once.
+ * Asks the collector for the next card; `exclude`: cards the client has; `more`: past today's new-card limit; `peek`:
+ * the counts alone, no card served or recorded; `release`: cards served here but never shown, to serve again at once;
+ * `newPerDay`: first sets the reader's new cards a day, kept on the collector for every client.
  */
 export const AnnotationReviewNextInput = Schema.Struct({
   source: Schema.Literals(["desktop", "mobile"]),
@@ -239,6 +246,7 @@ export const AnnotationReviewNextInput = Schema.Struct({
   more: Schema.optional(Schema.Boolean),
   peek: Schema.optional(Schema.Boolean),
   release: Schema.optional(Schema.Array(AnnotationId).check(Schema.isMaxLength(20))),
+  newPerDay: Schema.optional(AnnotationReviewNewPerDay),
 });
 export type AnnotationReviewNextInput = typeof AnnotationReviewNextInput.Type;
 
@@ -262,11 +270,13 @@ export type AnnotationReviewCard = typeof AnnotationReviewCard.Type;
 
 /**
  * The next card, or `null` when nothing is due now, with Anki's three numbers: new cards left today, learning cards
- * due now and review cards due today (all 0: done for today).
+ * due now and review cards due today (all 0: done for today), and the new cards a day in effect (collectors before
+ * the setting send none).
  */
 export const AnnotationReviewNextResult = Schema.Struct({
   card: Schema.NullOr(AnnotationReviewCard),
   counts: Schema.optional(Schema.Struct({ new: Count, learning: Count, review: Count })),
+  newPerDay: Schema.optional(AnnotationReviewNewPerDay),
 });
 export type AnnotationReviewNextResult = typeof AnnotationReviewNextResult.Type;
 
