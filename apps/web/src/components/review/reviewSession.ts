@@ -70,9 +70,12 @@ interface Request {
 }
 
 export interface ReviewSessionDeps {
+  /** A `peek` asks for the counts alone, with no card served; `newPerDay` sets the new cards a day first. */
   readonly fetchNext: (input: {
     readonly exclude: ReadonlyArray<string>;
     readonly more: boolean;
+    readonly peek?: boolean;
+    readonly newPerDay?: number;
   }) => Promise<ReviewFetched>;
   /** `failed`: it may not have arrived, and is sent again under the same uid. */
   readonly report: (item: ReviewItem) => Promise<"stored" | "rejected" | "failed">;
@@ -127,6 +130,32 @@ export class ReviewSession {
   reviewMore() {
     this.more = true;
     this.start();
+  }
+
+  /**
+   * Sets the new cards a day on the collector once earlier reports have had their first answer, and takes the counts
+   * it answers with. The next card, asked for under the old limit, is asked for again; with no card on screen, the
+   * session starts over, as the new limit may let new cards in. Answers with the collector's reply, or why there is
+   * none.
+   */
+  async setNewPerDay(newPerDay: number): Promise<ReviewFetched> {
+    const generation = this.generation;
+    await this.settled();
+    const request: Request = { graded: this.graded.length };
+    const value = await this.deps
+      .fetchNext({ exclude: [], more: false, peek: true, newPerDay })
+      .catch((): ReviewFetched => ({ detail: "request failed" }));
+    if (generation !== this.generation || "detail" in value) return value;
+    this.keepCounts(value, request);
+    if (!this.shown) {
+      this.start();
+      return value;
+    }
+    const next = this.request?.value;
+    if (next && "card" in next && next.card) this.deps.release([next.card.id]);
+    this.ask();
+    this.update(this.view);
+    return value;
   }
 
   /** Starts the card's timing at its first paint. */
