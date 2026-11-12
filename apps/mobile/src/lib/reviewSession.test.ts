@@ -57,7 +57,12 @@ interface Delivery {
  */
 function harness(answers: Array<ReviewFetch | Error> = [], autoDeliver = true) {
   let mono = 1000;
-  const requests: Array<{ exclude: ReadonlyArray<string>; more: boolean }> = [];
+  const requests: Array<{
+    exclude: ReadonlyArray<string>;
+    more: boolean;
+    peek?: boolean;
+    newPerDay?: number;
+  }> = [];
   const emitted: AnnotationReviewItem[] = [];
   const deliveries: Delivery[] = [];
   const badge: ReviewCounts[] = [];
@@ -66,7 +71,12 @@ function harness(answers: Array<ReviewFetch | Error> = [], autoDeliver = true) {
   let next = 0;
   const session = createReviewSession({
     fetchNext: async (request) => {
-      requests.push({ exclude: [...request.exclude], more: request.more });
+      requests.push({
+        exclude: [...request.exclude],
+        more: request.more,
+        ...(request.peek ? { peek: true } : {}),
+        ...(request.newPerDay === undefined ? {} : { newPerDay: request.newPerDay }),
+      });
       const reply = answers[next++] ?? answer(null);
       if (reply instanceof Error) throw reply;
       return reply;
@@ -322,6 +332,51 @@ describe("review session", () => {
     await settle();
     expect(h.view()).toMatchObject({ _tag: "card", card: card(7, "new") });
     expect(h.requests.map((request) => request.more)).toEqual([false, true, true]);
+  });
+
+  it("sets new cards a day with a peek, takes its counts, and asks again for what the old limit decided", async () => {
+    const h = harness([
+      answer(null, counts(0, 0, 0)),
+      { _tag: "answer", card: null, counts: counts(10, 0, 0), newPerDay: 20 },
+      answer(card(1, "new"), counts(10, 0, 0)),
+      answer(card(2, "new"), counts(10, 0, 0)),
+      { _tag: "answer", card: null, counts: counts(0, 0, 1), newPerDay: 0 },
+      answer(card(3), counts(0, 0, 1)),
+      answer(null, counts(0, 0, 0)),
+      { _tag: "error", detail: "collector down" },
+    ]);
+    h.session.start();
+    await settle();
+    expect(h.view()._tag).toBe("done");
+
+    // The day was done; the new limit lets new cards in.
+    await expect(h.session.setNewPerDay(20)).resolves.toBeNull();
+    await settle();
+    expect(h.requests[1]).toEqual({ exclude: [], more: false, peek: true, newPerDay: 20 });
+    expect(h.view()).toMatchObject({
+      _tag: "card",
+      card: card(1, "new"),
+      counts: counts(10, 0, 0),
+    });
+
+    // With a card on screen, the next card, served under the old limit, is handed back and asked for again.
+    h.shown();
+    await expect(h.session.setNewPerDay(0)).resolves.toBeNull();
+    await settle();
+    expect(h.requests.slice(4)).toEqual([
+      { exclude: ["c1"], more: false, peek: true, newPerDay: 0 },
+      { exclude: ["c1"], more: false },
+    ]);
+    expect(h.released).toEqual(["c2"]);
+    expect(h.view()).toMatchObject({ _tag: "card", card: card(1, "new"), counts: counts(0, 0, 1) });
+    h.session.reveal();
+    h.session.grade(3);
+    h.session.next();
+    await settle();
+    expect(h.view()).toMatchObject({ _tag: "card", card: card(3) });
+
+    await expect(h.session.setNewPerDay(5)).resolves.toBe("collector down");
+    expect(h.view()).toMatchObject({ _tag: "card", card: card(3) });
   });
 
   it("waits when cards are due later, and asks again on next", async () => {
