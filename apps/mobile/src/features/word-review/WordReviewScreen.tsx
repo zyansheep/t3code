@@ -1,6 +1,11 @@
+import { useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import type { AnnotationReviewCard, EnvironmentId } from "@t3tools/contracts";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import {
+  ANNOTATION_REVIEW_NEW_PER_DAY_MAX,
+  type AnnotationReviewCard,
+  type EnvironmentId,
+} from "@t3tools/contracts";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AppState, Pressable, useWindowDimensions, View } from "react-native";
 import {
   GestureDetector,
@@ -24,12 +29,13 @@ import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppBar } from "../../components/ui/AppBar";
 import { AppText } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
+import { NumberField } from "../../components/ui/NumberField";
 import { subscribeAppState } from "../../lib/appState";
 import { cn } from "../../lib/cn";
 import { MOBILE_MOTION } from "../../lib/designTokens";
 import { reviewIntervalLabel } from "../../lib/reviewIntervals";
 import type { ReviewCounts, ReviewGrade, ReviewSession, ReviewView } from "../../lib/reviewSession";
-import { createWordReviewSession } from "../../state/word-review";
+import { createWordReviewSession, reviewNewPerDayAtom } from "../../state/word-review";
 
 const ENTER_TIMING = {
   duration: MOBILE_MOTION.enter,
@@ -49,6 +55,8 @@ const FLING_DISTANCE = 24;
 const REVEAL_DISTANCE = 72;
 /** While cards are due later but none now, ask again this often. */
 const WAITING_RETRY_MS = 30_000;
+/** A run of steps on the new-cards field is sent once it rests this long. */
+const SETTING_SEND_DELAY_MS = 600;
 
 // Anki's colours for its three counts: new blue, learning red, review green.
 const QUEUES = [
@@ -81,23 +89,50 @@ function swipeOf(
   return dy < -REVEAL_DISTANCE || (vy < -FLING_VELOCITY && dy < -FLING_DISTANCE) ? "up" : null;
 }
 
-/** Review cards from one environment's server, as Anki shows them. */
+/**
+ * Review cards from one environment's server, as Anki shows them. The bar's settings button, once the server has said
+ * how many new cards a day it serves, opens a row to change that.
+ */
 export function WordReviewScreen({
   route,
 }: StaticScreenProps<{ readonly environmentId: EnvironmentId }>) {
   const navigation = useNavigation();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const newPerDayKnown = useAtomValue(reviewNewPerDayAtom(route.params.environmentId)) !== null;
   const goBack = () => {
     if (navigation.canGoBack()) navigation.goBack();
   };
   return (
     <View className="flex-1 bg-screen">
-      <AppBar title="Review" onBack={goBack} />
-      <WordReview key={route.params.environmentId} environmentId={route.params.environmentId} />
+      <AppBar
+        title="Review"
+        onBack={goBack}
+        actions={
+          newPerDayKnown
+            ? [
+                {
+                  accessibilityLabel: "Review settings",
+                  icon: "slider.horizontal.3",
+                  selected: settingsOpen,
+                  onPress: () => setSettingsOpen((open) => !open),
+                },
+              ]
+            : []
+        }
+      />
+      <WordReview
+        key={route.params.environmentId}
+        environmentId={route.params.environmentId}
+        settingsOpen={settingsOpen}
+      />
     </View>
   );
 }
 
-function WordReview(props: { readonly environmentId: EnvironmentId }) {
+function WordReview(props: {
+  readonly environmentId: EnvironmentId;
+  readonly settingsOpen: boolean;
+}) {
   const insets = useSafeAreaInsets();
   // One session per mount; the screen keys this by environment.
   const [session] = useState(() => createWordReviewSession(props.environmentId));
@@ -121,6 +156,9 @@ function WordReview(props: { readonly environmentId: EnvironmentId }) {
         counts={view.counts}
         current={view._tag === "card" && !view.graded ? view.card.queue : undefined}
       />
+      {props.settingsOpen ? (
+        <NewPerDayRow environmentId={props.environmentId} session={session} />
+      ) : null}
       <ReviewBody view={view} session={session} />
     </View>
   );
@@ -148,6 +186,52 @@ function CountsBar(props: {
           {counts[queue.key]}
         </AppText>
       ))}
+    </View>
+  );
+}
+
+/**
+ * New cards a day, kept on the server for every client: shows the value it last answered with, or the one being sent.
+ * Steps are sent once they rest, so a run of presses is one request.
+ */
+function NewPerDayRow(props: {
+  readonly environmentId: EnvironmentId;
+  readonly session: ReviewSession;
+}) {
+  const saved = useAtomValue(reviewNewPerDayAtom(props.environmentId));
+  const [pending, setPending] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  if (saved === null) return null;
+  // Not cleared on unmount: a change made just before the row closes is still sent.
+  const change = (value: number) => {
+    setPending(value);
+    setError(null);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      void props.session.setNewPerDay(value).then((failure) => {
+        setPending((current) => (current === value ? null : current));
+        setError(failure);
+      });
+    }, SETTING_SEND_DELAY_MS);
+  };
+  return (
+    <View className="gap-1 px-4 pb-2">
+      <View className="min-h-12 flex-row items-center justify-between gap-3">
+        <AppText className="text-base text-foreground">New cards a day</AppText>
+        <NumberField
+          label="New cards a day"
+          min={0}
+          max={ANNOTATION_REVIEW_NEW_PER_DAY_MAX}
+          value={pending ?? saved}
+          onValueChange={change}
+        />
+      </View>
+      {error ? (
+        <AppText className="text-sm text-danger-foreground" accessibilityLiveRegion="polite">
+          {error}
+        </AppText>
+      ) : null}
     </View>
   );
 }
