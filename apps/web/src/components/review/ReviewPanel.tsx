@@ -1,12 +1,17 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { AnnotationReviewCard, EnvironmentId } from "@t3tools/contracts";
-import { LayersIcon } from "lucide-react";
+import {
+  ANNOTATION_REVIEW_NEW_PER_DAY_MAX,
+  type AnnotationReviewCard,
+  type EnvironmentId,
+} from "@t3tools/contracts";
+import { LayersIcon, Settings2Icon } from "lucide-react";
 import {
   Fragment,
   type KeyboardEvent,
   type PointerEvent,
   useEffect,
   useEffectEvent,
+  useId,
   useRef,
   useState,
   useSyncExternalStore,
@@ -19,12 +24,22 @@ import {
   holdReviewCounts,
   releaseReviewCards,
   reportReview,
+  reviewNewPerDayAtom,
   setReviewCounts,
 } from "~/state/annotationReview";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
+import { Label } from "../ui/label";
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput,
+} from "../ui/number-field";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Separator } from "../ui/separator";
 import { Spinner } from "../ui/spinner";
 import {
@@ -54,7 +69,8 @@ const pageVisible = () => getDocumentActivity().visible;
 /**
  * Anki-style review of the collector's cards in the right panel: the word, then on Space or Enter its reading and
  * meaning with Again, Hard, Good and Easy (1 to 4; Space or Enter is Good). Keys count only while focus is in the
- * panel. A card left without a grade, when the panel closes or the window is hidden, is reported as left.
+ * panel. A card left without a grade, when the panel closes or the window is hidden, is reported as left. Its menu sets
+ * the new cards a day, kept on the collector, once the collector has said what it is.
  */
 export function ReviewPanel(props: {
   readonly environmentId: EnvironmentId;
@@ -65,6 +81,7 @@ export function ReviewPanel(props: {
   const windowVisible = useSyncExternalStore(subscribeDocumentActivity, pageVisible);
   const active = props.visible && windowVisible;
   const [state, setState] = useState<ReviewState>(REVIEW_LOADING);
+  const newPerDay = useAtomValue(reviewNewPerDayAtom(environmentId));
   const session = useRef<ReviewSession | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const changed = useEffectEvent((next: ReviewState) => {
@@ -99,8 +116,24 @@ export function ReviewPanel(props: {
     root.current?.focus({ preventScroll: true });
   };
   const { view, counts } = state;
+  const setNewPerDay = async (value: number) => {
+    const current = session.current;
+    const answer = current
+      ? await current.setNewPerDay(value)
+      : await fetchReviewCard(environmentId, {
+          exclude: [],
+          more: false,
+          peek: true,
+          newPerDay: value,
+        });
+    if ("detail" in answer) return answer.detail;
+    if (!current) setReviewCounts(environmentId, answer.counts ?? null);
+    return null;
+  };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // Keys typed in the menu, a portal, reach the panel through React but are not its.
+    if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
     if (view.phase !== "card" || event.defaultPrevented || event.nativeEvent.isComposing) return;
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     const confirm = event.key === " " || event.key === "Enter";
@@ -116,7 +149,8 @@ export function ReviewPanel(props: {
     else act((current) => current.grade(grade as ReviewGrade));
   };
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.target instanceof Element && event.target.closest("button")) return;
+    if (!(event.target instanceof Element) || !event.currentTarget.contains(event.target)) return;
+    if (event.target.closest("button")) return;
     root.current?.focus({ preventScroll: true });
   };
 
@@ -132,11 +166,21 @@ export function ReviewPanel(props: {
       onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
     >
-      {counts ? (
-        <ReviewCountsBar
-          counts={counts}
-          current={view.phase === "card" ? view.card.queue : undefined}
-        />
+      {counts || newPerDay !== null ? (
+        <div className="grid min-h-9 shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b border-border/70 px-2 py-1.5">
+          {counts ? (
+            <ReviewCountsBar
+              className="col-start-2"
+              counts={counts}
+              current={view.phase === "card" ? view.card.queue : undefined}
+            />
+          ) : null}
+          {newPerDay !== null ? (
+            <div className="col-start-3 flex justify-end">
+              <ReviewSettings newPerDay={newPerDay} onSetNewPerDay={setNewPerDay} />
+            </div>
+          ) : null}
+        </div>
       ) : null}
       {view.phase === "card" ? (
         <>
@@ -221,11 +265,17 @@ export function ReviewPanel(props: {
 
 /** Anki's three numbers, the current card's queue underlined. */
 function ReviewCountsBar(props: {
+  readonly className?: string;
   readonly counts: ReviewCounts;
   readonly current: AnnotationReviewCard["queue"];
 }) {
   return (
-    <div className="flex shrink-0 items-center justify-center gap-1.5 border-b border-border/70 px-3 py-2 text-sm font-medium tabular-nums">
+    <div
+      className={cn(
+        "flex items-center justify-center gap-1.5 text-sm font-medium tabular-nums",
+        props.className,
+      )}
+    >
       {QUEUES.map(({ queue, label, className }, index) => (
         <Fragment key={queue}>
           {index > 0 ? (
@@ -247,6 +297,75 @@ function ReviewCountsBar(props: {
         </Fragment>
       ))}
     </div>
+  );
+}
+
+/**
+ * The panel's menu: the new cards a day, shared by every client of the collector. Shows the value from the collector's
+ * latest answer; one it refuses goes back to that value, with why.
+ */
+function ReviewSettings(props: {
+  readonly newPerDay: number;
+  readonly onSetNewPerDay: (value: number) => Promise<string | null>;
+}) {
+  const id = useId();
+  const [field, setField] = useState({
+    saved: props.newPerDay,
+    draft: props.newPerDay as number | null,
+    error: null as string | null,
+  });
+  if (field.saved !== props.newPerDay) {
+    setField({ saved: props.newPerDay, draft: props.newPerDay, error: null });
+  }
+  const commit = (next: number | null) => {
+    const value = next === null ? field.saved : Math.round(next);
+    setField((current) => ({ ...current, draft: value, error: null }));
+    if (value === field.saved) return;
+    void props.onSetNewPerDay(value).then((error) => {
+      if (error === null) return;
+      setField((current) => ({ ...current, draft: current.saved, error }));
+    });
+  };
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={<Button variant="ghost" size="icon-xs" aria-label="Review settings" />}
+      >
+        <Settings2Icon />
+      </PopoverTrigger>
+      <PopoverPopup align="end" padding="compact">
+        <div className="flex items-center gap-3">
+          <Label htmlFor={id}>New cards a day</Label>
+          <NumberField
+            id={id}
+            className="w-28"
+            size="sm"
+            min={0}
+            max={ANNOTATION_REVIEW_NEW_PER_DAY_MAX}
+            step={1}
+            value={field.draft}
+            onValueChange={(draft) => setField((current) => ({ ...current, draft }))}
+            onValueCommitted={commit}
+          >
+            <NumberFieldGroup>
+              <NumberFieldDecrement aria-label="Fewer new cards a day" />
+              {/* The field commits on blur, so Enter blurs it. */}
+              <NumberFieldInput
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
+              />
+              <NumberFieldIncrement aria-label="More new cards a day" />
+            </NumberFieldGroup>
+          </NumberField>
+        </div>
+        {field.error ? (
+          <p role="alert" className="mt-2 text-xs text-destructive-foreground">
+            {field.error}
+          </p>
+        ) : null}
+      </PopoverPopup>
+    </Popover>
   );
 }
 

@@ -28,6 +28,17 @@ export const reviewCountsAtom = Atom.family((_environmentId: EnvironmentId) =>
   ),
 );
 
+/**
+ * The new cards a day the collector last said were in effect, per environment: `null` until known, and from a
+ * collector without the setting.
+ */
+export const reviewNewPerDayAtom = Atom.family((_environmentId: EnvironmentId) =>
+  Atom.make<number | null>(null).pipe(
+    Atom.keepAlive,
+    Atom.withLabel("annotation-review-new-per-day"),
+  ),
+);
+
 const MAX_RELEASE = 20;
 /** Cards served to this client but never shown, per environment, to name in the next request. */
 const unshown = new Map<EnvironmentId, Set<string>>();
@@ -46,7 +57,7 @@ export function releaseReviewCards(environmentId: EnvironmentId, ids: ReadonlyAr
 
 /**
  * Asks the collector for the next card through `environmentId`'s server, handing back the cards released since the
- * last answer; a `peek` asks for the counts alone.
+ * last answer; a `peek` asks for the counts alone, and `newPerDay` sets the new cards a day first.
  */
 export async function fetchReviewCard(
   environmentId: EnvironmentId,
@@ -54,6 +65,7 @@ export async function fetchReviewCard(
     readonly exclude: ReadonlyArray<string>;
     readonly more: boolean;
     readonly peek?: boolean;
+    readonly newPerDay?: number;
   },
 ): Promise<AnnotationReviewNextResult | { readonly detail: string }> {
   const release = [...(unshown.get(environmentId) ?? [])];
@@ -67,6 +79,7 @@ export async function fetchReviewCard(
         exclude: [...input.exclude],
         ...(input.more ? { more: true } : {}),
         ...(input.peek ? { peek: true } : {}),
+        ...(input.newPerDay === undefined ? {} : { newPerDay: input.newPerDay }),
         ...(release.length > 0 ? { release } : {}),
       },
     },
@@ -75,6 +88,9 @@ export async function fetchReviewCard(
   if (result._tag === "Success") {
     const pending = unshown.get(environmentId);
     for (const id of release) pending?.delete(id);
+    if (result.value.newPerDay !== undefined) {
+      appAtomRegistry.set(reviewNewPerDayAtom(environmentId), result.value.newPerDay);
+    }
     return result.value;
   }
   const error = squashAtomCommandFailure(result);
