@@ -190,6 +190,24 @@ describe("idleCompactionWindow", () => {
     };
     expect(idleCompactionWindow(sideChat, NOW_MS)).toBeNull();
   });
+
+  it("starts right after the turn in afterTurn mode, even when the cache expiry is unknown", () => {
+    expect(
+      idleCompactionWindow(records({ cacheExpiresInMs: 60 * MINUTE_MS }), NOW_MS, "afterTurn")
+        ?.startMs,
+    ).toBe(NOW_MS);
+    expect(idleCompactionWindow(records(), NOW_MS, "afterTurn")?.startMs).toBe(NOW_MS);
+    expect(
+      idleCompactionWindow(records({ cacheExpiresInMs: -MINUTE_MS }), NOW_MS, "afterTurn"),
+    ).toBeNull();
+    expect(
+      idleCompactionWindow(
+        records({ cacheExpiresInMs: 60 * MINUTE_MS, usedTokens: 199_999 }),
+        NOW_MS,
+        "afterTurn",
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("IdleCompactionService", () => {
@@ -205,6 +223,9 @@ describe("IdleCompactionService", () => {
     { mode: "beforeCacheExpires", driver: "codex", instance: "custom-codex", reads: 0 },
     { mode: "beforeCacheExpires", driver: "claudeAgent", instance: "custom-claude", reads: 1 },
     { mode: "beforeCacheExpires", unconfigured: true, reads: 1 },
+    { mode: "afterTurn", reads: 1 },
+    { mode: "afterTurn", override: "off", reads: 0 },
+    { mode: "onReturn", override: "afterTurn", reads: 1 },
   ] as const)(
     "loads history only for eligible idle compaction: $mode/$override/$enabled/$projectDisabled/$instance/$unconfigured",
     (scenario) => {
@@ -251,7 +272,7 @@ describe("IdleCompactionService", () => {
             updatedAt: at(),
           };
           let historyReads = 0;
-          let dispatches = 0;
+          const dispatched: Array<unknown> = [];
           const done = yield* Deferred.make<void>();
           const tracer = Tracer.make({
             span(options) {
@@ -275,9 +296,9 @@ describe("IdleCompactionService", () => {
                 occurredAt: at(),
                 payload: data.runs[0]!,
               }),
-              dispatch: () =>
+              dispatch: (command) =>
                 Effect.sync(() => {
-                  dispatches++;
+                  dispatched.push("idleCompaction" in command ? command.idleCompaction : null);
                   return { sequence: 1, storedEvents: [] };
                 }),
             }),
@@ -319,7 +340,9 @@ describe("IdleCompactionService", () => {
             yield* Deferred.await(done);
           }).pipe(Effect.provide(dependencies), Effect.withTracer(tracer));
           expect(historyReads).toBe(test.reads);
-          expect(dispatches).toBe(test.reads);
+          // The /compact carries the mode that sent it.
+          const sentBy = test.override === "default" ? test.mode : test.override;
+          expect(dispatched).toEqual(test.reads === 0 ? [] : [sentBy]);
         }),
       );
     },

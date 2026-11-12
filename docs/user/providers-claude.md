@@ -78,6 +78,11 @@ over 200,000 tokens. Each Claude provider's settings can override it:
   If the window is missed, such as when you enable this mode after the cache has
   expired or the server restarts before compaction runs, it falls back to
   **When you return**. Switch the chip to **Keep** to keep the full history for that message.
+- **Right after each turn (beta)** compacts a thread as soon as a turn ends, while the
+  history is still cached, so the next message starts from the summary instead of
+  re-reading the full history on every request. It shows as the same `/compact` turn. It
+  trades away detail you might want in a follow-up message for a smaller context on the
+  next task. If it doesn't run, it falls back to **When you return**.
 - **Never** skips idle compaction and Claude's resume prompt. **Auto-compact after**
   still applies, and you can still compact by hand.
 
