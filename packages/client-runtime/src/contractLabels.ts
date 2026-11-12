@@ -211,6 +211,7 @@ const IDLE_COMPACTION_MODE_LABELS: Record<IdleCompactionMode | "default", string
   default: msg("Use default"),
   onReturn: msg("When you return"),
   beforeCacheExpires: msg("Before the cache expires (beta)"),
+  afterTurn: "Right after each turn (beta)",
   off: msg("Never", { $context: "idle compaction mode" }),
 };
 
