@@ -1,4 +1,8 @@
-import { isListedThreadLineage, type OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import {
+  type IdleCompactionMode,
+  isListedThreadLineage,
+  type OrchestrationV2ThreadProjection,
+} from "@t3tools/contracts";
 import { COMPACTION_SUGGESTION_MIN_TOKENS } from "@t3tools/shared/claudeCompaction";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
@@ -23,11 +27,16 @@ export type IdleCompactionRecords = Pick<
   | "contextTransfers"
 >;
 
+/** The modes in which the server sends `/compact` on its own, rather than on the user's return. */
+export type ServerIdleCompactionMode = Extract<
+  IdleCompactionMode,
+  "afterTurn" | "beforeCacheExpires"
+>;
+
 /**
- * When an idle Claude thread should compact, or null when it should not. The
- * window ends when the prompt cache of Claude's last request expires (1h on
- * subscriptions, 5m on API keys); compacting after that pays a full uncached
- * read.
+ * When an idle Claude thread should compact, or null. The window ends when the last request's
+ * prompt cache expires (1h on subscriptions, 5m on API keys), since compacting later pays an
+ * uncached read; `beforeCacheExpires` starts just before that, `afterTurn` right away.
  */
 export function idleCompactionWindow(
   {
@@ -41,6 +50,7 @@ export function idleCompactionWindow(
     contextTransfers,
   }: IdleCompactionRecords,
   nowMs: number,
+  mode: ServerIdleCompactionMode = "beforeCacheExpires",
 ): {
   readonly runId: (typeof runs)[number]["id"];
   readonly startMs: number;
@@ -98,9 +108,18 @@ export function idleCompactionWindow(
     .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
   if ((usages[0]?.usedTokens ?? 0) < MIN_CONTEXT_TOKENS) return null;
   // A request served fully from cache creates no cache entry and reports no
-  // TTL, but it still refreshes the cache. Treat it as unknown and skip.
+  // TTL, but it still refreshes the cache. Treat it as unknown: right after the
+  // turn the cache is warm anyway, but a later start time can't be placed.
   const expiresAt = usages[0]?.promptCacheExpiresAt;
   const endMs = expiresAt === undefined ? Number.NaN : Date.parse(expiresAt);
+  if (mode === "afterTurn") {
+    if (nowMs >= endMs) return null;
+    return {
+      runId: latestRun.id,
+      startMs: nowMs,
+      endMs: Number.isFinite(endMs) ? endMs : Infinity,
+    };
+  }
   if (!Number.isFinite(endMs) || nowMs >= endMs) return null;
   return { runId: latestRun.id, startMs: endMs - LEAD_MS, endMs };
 }

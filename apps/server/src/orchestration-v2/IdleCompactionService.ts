@@ -15,15 +15,21 @@ import * as Stream from "effect/Stream";
 
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { idleCompactionWindow } from "./IdleCompaction.ts";
+import { idleCompactionWindow, type ServerIdleCompactionMode } from "./IdleCompaction.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
+const serverIdleCompactionMode = (
+  ...args: Parameters<typeof resolveIdleCompaction>
+): ServerIdleCompactionMode | null => {
+  const mode = resolveIdleCompaction(...args);
+  return mode === "afterTurn" || mode === "beforeCacheExpires" ? mode : null;
+};
+
 /**
- * Beta: when a run completes on a Claude instance set to compact before the
- * cache expires, waits until shortly before its prompt cache expires and sends
- * `/compact` as a visible T3 Code turn. Timers live in
- * memory, so a server restart skips compactions that were still waiting.
+ * Beta: when a Claude run completes, sends `/compact` as a visible T3 Code turn, right away
+ * (`afterTurn`) or shortly before its prompt cache expires (`beforeCacheExpires`). Timers live
+ * in memory, so a server restart skips compactions that were still waiting.
  */
 export const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -40,9 +46,10 @@ export const make = Effect.gen(function* () {
         const claudeInstance = Object.hasOwn(current.providerInstances, thread.providerInstanceId)
           ? current.providerInstances[thread.providerInstanceId]?.driver === "claudeAgent"
           : thread.providerInstanceId === "claudeAgent";
+        const mode = serverIdleCompactionMode(current, thread.providerInstanceId);
         if (
           !claudeInstance ||
-          resolveIdleCompaction(current, thread.providerInstanceId) !== "beforeCacheExpires" ||
+          mode === null ||
           !resolveProjectProviderInstanceEnabled(
             current,
             thread.projectId,
@@ -79,8 +86,7 @@ export const make = Effect.gen(function* () {
           },
         );
         if (
-          resolveIdleCompaction(current, records.thread.providerInstanceId) !==
-            "beforeCacheExpires" ||
+          serverIdleCompactionMode(current, records.thread.providerInstanceId) !== mode ||
           !resolveProjectProviderInstanceEnabled(
             current,
             records.thread.projectId,
@@ -100,7 +106,7 @@ export const make = Effect.gen(function* () {
           continue;
         }
         const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-        const window = idleCompactionWindow(records, nowMs);
+        const window = idleCompactionWindow(records, nowMs, mode);
         if (window?.runId !== runId) return;
         if (nowMs < window.startMs) {
           yield* Effect.sleep(Duration.millis(window.startMs - nowMs));
@@ -116,7 +122,7 @@ export const make = Effect.gen(function* () {
           attachments: [],
           createdBy: "agent",
           creationSource: "server",
-          idleCompaction: "beforeCacheExpires",
+          idleCompaction: mode,
           dispatchMode: { type: "start_immediately" },
         });
         return;
