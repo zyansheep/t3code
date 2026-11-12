@@ -204,15 +204,16 @@ const decodeReviewAnswer = Schema.decodeUnknownOption(
     ok: Schema.Boolean,
     card: Schema.optional(Schema.NullOr(AnnotationReviewCard)),
     counts: AnnotationReviewNextResult.fields.counts,
+    newPerDay: AnnotationReviewNextResult.fields.newPerDay,
     error: Schema.optional(Schema.String),
   }),
 );
 
 /**
- * Asks the collector at the origin of `T3CODE_ANNOTATION_EVENTS_URL` for the next word to review, with
- * `POST /v1/review/next`, and returns its card (`null`: nothing is due now) with its counts when it sends them. Fails
- * with a reason short enough to show: `not configured`, the collector's own error, its status, or
- * `collector unreachable`.
+ * Asks the collector at the origin of `T3CODE_ANNOTATION_EVENTS_URL` for the next word to review (`POST /v1/review/next`,
+ * passing a `newPerDay` on to save first) and returns its card (`null`: nothing due now) with its counts and new cards
+ * a day when it sends them. Fails with a reason short enough to show: `not configured`, the collector's own error, its
+ * status, or `collector unreachable`.
  */
 export const nextAnnotationReview = Effect.fn("nextAnnotationReview")(
   function* (input: AnnotationReviewNextInput) {
@@ -230,6 +231,7 @@ export const nextAnnotationReview = Effect.fn("nextAnnotationReview")(
         ...(input.more === undefined ? {} : { more: input.more }),
         ...(input.peek === undefined ? {} : { peek: input.peek }),
         ...(input.release === undefined ? {} : { release: input.release }),
+        ...(input.newPerDay === undefined ? {} : { newPerDay: input.newPerDay }),
       }),
     );
     const response = yield* client.execute(request);
@@ -240,6 +242,7 @@ export const nextAnnotationReview = Effect.fn("nextAnnotationReview")(
       return {
         card: answer.card,
         ...(answer.counts === undefined ? {} : { counts: answer.counts }),
+        ...(answer.newPerDay === undefined ? {} : { newPerDay: answer.newPerDay }),
       } satisfies AnnotationReviewNextResult;
     }
     const reason = answer?.error?.trim();
