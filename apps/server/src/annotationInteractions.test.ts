@@ -450,6 +450,24 @@ describe("nextAnnotationReview", () => {
     }),
   );
 
+  it.effect("passes new cards a day on to be saved, and returns the limit in effect", () =>
+    Effect.gen(function* () {
+      const counts = { new: 25, learning: 0, review: 4 };
+      const { requests, run } = reviewWith(
+        configured,
+        { status: 200, body: { ok: true, card: null, counts, newPerDay: 25 } },
+        { source: "mobile", exclude: [], peek: true, newPerDay: 25 },
+      );
+      assert.deepStrictEqual(yield* run, { card: null, counts, newPerDay: 25 });
+      assert.deepStrictEqual(JSON.parse(requests[0]!.body), {
+        source: "mobile",
+        exclude: [],
+        peek: true,
+        newPerDay: 25,
+      });
+    }),
+  );
+
   it.effect("fails as not configured without a collector, sending nothing", () =>
     Effect.gen(function* () {
       const { requests, run } = reviewWith({}, { status: 200, body: { ok: true, card: null } });
