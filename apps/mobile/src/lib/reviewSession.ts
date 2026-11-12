@@ -23,6 +23,8 @@ export type ReviewFetch =
       readonly _tag: "answer";
       readonly card: AnnotationReviewCard | null;
       readonly counts?: ReviewCounts | undefined;
+      /** The new cards a day in effect, from a server that sends it. */
+      readonly newPerDay?: number | undefined;
     }
   | { readonly _tag: "error"; readonly detail: string };
 
@@ -50,10 +52,15 @@ export type ReviewPhase =
 export type ReviewView = ReviewPhase & { readonly counts: ReviewCounts | null };
 
 export interface ReviewSessionOptions {
-  /** Never rejects: a failure comes back as `{ _tag: "error" }`. */
+  /**
+   * Never rejects: a failure comes back as `{ _tag: "error" }`. A `peek` asks for the counts alone, serving no card;
+   * `newPerDay` sets the new cards a day first.
+   */
   readonly fetchNext: (request: {
     readonly exclude: ReadonlyArray<string>;
     readonly more: boolean;
+    readonly peek?: boolean;
+    readonly newPerDay?: number;
   }) => Promise<ReviewFetch>;
   /**
    * Queues a review item for the server; must not throw into the view. For a graded item it settles once the item has
@@ -224,7 +231,7 @@ export function createReviewSession(options: ReviewSessionOptions) {
   };
 
   /** Asks the server once every grade so far has reached it; what to exclude is read when it asks. */
-  const ask = (): Promise<Answer> =>
+  const ask = (setting?: { readonly peek: true; readonly newPerDay: number }): Promise<Answer> =>
     delivered.then(() => {
       asked += 1;
       const sequence = asked;
@@ -232,7 +239,7 @@ export function createReviewSession(options: ReviewSessionOptions) {
       const gradesBefore = gradedQueues.length;
       let promise: Promise<ReviewFetch>;
       try {
-        promise = options.fetchNext({ exclude: exclude(), more });
+        promise = options.fetchNext({ exclude: exclude(), more, ...setting });
       } catch (error) {
         promise = Promise.resolve({ _tag: "error", detail: reviewFailureDetail(error) });
       }
@@ -431,6 +438,26 @@ export function createReviewSession(options: ReviewSessionOptions) {
       if (phase._tag === "error" || phase._tag === "waiting") return load(ask());
       if (phase._tag !== "card" || current === null || !current.graded) return;
       advance();
+    },
+    /**
+     * Sets the new cards a day once the server has every grade so far, with a peek whose counts go on screen; resolves
+     * with why it failed, or null. What the old limit decided is asked again: the next card for the one on screen, or
+     * the card the screen waits for (a day that was done may have new cards now).
+     */
+    setNewPerDay(newPerDay: number): Promise<string | null> {
+      if (closed || !started) return Promise.resolve("The review is closed");
+      return ask({ peek: true, newPerDay }).then(({ result }) => {
+        if (result._tag === "error") return result.detail;
+        if (closed) return null;
+        if (phase._tag !== "card") {
+          load(ask());
+          return null;
+        }
+        const dropped = prefetch;
+        if (dropped !== null) void dropped.promise.then(drop);
+        startPrefetch();
+        return null;
+      });
     },
     /** "Review more" once the day is done: new cards past today's limit, for the rest of the session. */
     more() {

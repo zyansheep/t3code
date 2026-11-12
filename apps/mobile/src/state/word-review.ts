@@ -4,6 +4,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { type EnvironmentId, WS_METHODS } from "@t3tools/contracts";
+import { Atom } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { glossOpenSession } from "../lib/glossOpens";
@@ -28,6 +29,11 @@ const nextReview = createEnvironmentRpcCommand(connectionAtomRuntime, {
   tag: WS_METHODS.serverNextAnnotationReview,
 });
 
+/** The new cards a day the server last said were in effect, per environment; null until known. */
+export const reviewNewPerDayAtom = Atom.family((_environmentId: EnvironmentId) =>
+  Atom.make<number | null>(null).pipe(Atom.keepAlive, Atom.withLabel("mobile:review-new-per-day")),
+);
+
 /** Per environment, the cards to release with the next request, the badge's peeks included. */
 const releases = new Map<EnvironmentId, ReturnType<typeof createCardReleases>>();
 
@@ -46,6 +52,7 @@ function fetchNextCard(
     readonly exclude: ReadonlyArray<string>;
     readonly more: boolean;
     readonly peek?: boolean;
+    readonly newPerDay?: number;
   },
 ): Promise<ReviewFetch> {
   const released = releasesOf(environmentId).take();
@@ -59,6 +66,7 @@ function fetchNextCard(
         exclude: [...request.exclude],
         ...(request.more ? { more: true } : {}),
         ...(request.peek ? { peek: true } : {}),
+        ...(request.newPerDay === undefined ? {} : { newPerDay: request.newPerDay }),
         ...(released.length > 0 ? { release: [...released] } : {}),
       },
     },
@@ -68,7 +76,9 @@ function fetchNextCard(
       releasesOf(environmentId).restore(released);
       return { _tag: "error", detail: reviewFailureDetail(squashAtomCommandFailure(result)) };
     }
-    return { _tag: "answer", card: result.value.card, counts: result.value.counts };
+    const { card, counts, newPerDay } = result.value;
+    if (newPerDay !== undefined) appAtomRegistry.set(reviewNewPerDayAtom(environmentId), newPerDay);
+    return { _tag: "answer", card, counts, newPerDay };
   });
   return fetchWithin(asked, FETCH_TIMEOUT_MS, (cardId) => releasesOf(environmentId).add(cardId));
 }
