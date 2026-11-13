@@ -154,15 +154,19 @@ function RelativeTimeLabel(props: { timestamp: string | null }) {
       );
 }
 
-// The thread's API-equivalent cost before its time, when cost estimates are on.
+// The thread's API-equivalent cost before its time or status, when cost estimates are on. It
+// keeps the slot's muted weight and colour inside a coloured status. A zero total, such as a
+// thread whose only turns failed, adds nothing to the row.
 function ThreadCostLabel(props: { costUsd: number | undefined }) {
   const enabled = useClientSettings((settings) => settings.costEstimatesEnabled);
-  if (!enabled || props.costUsd === undefined) return null;
+  if (!enabled || props.costUsd === undefined || props.costUsd === 0) return null;
   return (
-    <>
-      <span>{formatCostUsd(props.costUsd)}</span>
-      <span aria-hidden> · </span>
-    </>
+    <span className="font-normal text-secondary-label">
+      {formatCostUsd(props.costUsd)}
+      <span aria-hidden className="mx-1">
+        ·
+      </span>
+    </span>
   );
 }
 
@@ -1344,6 +1348,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           topStatus.className,
                         )}
                       >
+                        <ThreadCostLabel costUsd={thread.source.costUsd} />
                         <TopStatusIcon icon={topStatus.icon} className="size-3" />
                         {topStatus.label}
                       </span>
@@ -1532,6 +1537,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             topStatus.className,
                           )}
                         >
+                          <ThreadCostLabel costUsd={thread.source.costUsd} />
                           <TopStatusIcon icon={topStatus.icon} className="size-4" />
                           {/* Not a live region: a collapsed sidebar is inert, so
                             BackgroundThreadAnnouncer and the open thread's
