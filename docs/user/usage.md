@@ -84,6 +84,15 @@ marked **Not saved**. Reconnect them and choose **Retry failed saves** to finish
 without writing again to environments that already saved. Changes are not queued after you close
 the dialog.
 
+## See cost per turn and thread
+
+Turn on **Settings → Appearance → Cost estimates** to show what each thread has cost beside its
+time in the sidebar, and each turn's cost on its **Worked for** row. Claude turns use the cost
+Claude Code reports, which includes subagents. Other providers' turns are priced from the main
+agent's tokens with the same prices as **Usage**, including your custom model prices. Turns from
+before the update, and turns whose model has no known price, show no cost. On a subscription
+these are API-equivalent amounts, not what you pay.
+
 ## Show only some models
 
 To count only some models, or to leave some out, add `usageModelFilter` to the server's

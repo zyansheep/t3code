@@ -348,6 +348,31 @@ export function AppearanceSettingsPanel() {
             />
           }
         />
+        <SettingsRow
+          {...searchableSetting("cost-estimates")}
+          description="Show what each turn and thread would cost at API prices, beside its time in the sidebar and on its Worked for row. On a subscription this is not what you pay."
+          resetAction={
+            settings.costEstimatesEnabled !== DEFAULT_UNIFIED_SETTINGS.costEstimatesEnabled ? (
+              <SettingResetButton
+                label="cost estimates"
+                onClick={() =>
+                  updateSettings({
+                    costEstimatesEnabled: DEFAULT_UNIFIED_SETTINGS.costEstimatesEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.costEstimatesEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ costEstimatesEnabled: Boolean(checked) })
+              }
+              aria-label="Show cost estimates"
+            />
+          }
+        />
         <AdvancedSettings
           targetIds={[
             searchableSetting("panel-animations").id,
