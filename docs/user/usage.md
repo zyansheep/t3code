@@ -27,6 +27,10 @@ Usage aggregates history across Codex, Claude Code, Grok Build, OpenCode, Antigr
 }
 ```
 
+## Cost per turn and thread
+
+Turn on **Settings → Appearance → Cost estimates** to show each thread's cost beside its time in the sidebar and each turn's cost on its **Worked for** row. Claude turns use the cost Claude Code reports (subagents included); other providers' turns are priced from the main agent's tokens with the same prices as **Usage**, custom prices included. Turns from before the update, and turns whose model has no known price, show no cost. On a subscription these are API-equivalent amounts, not what you pay.
+
 ## Subscription limits
 
 **Usage → Limits** pools subscription quotas per provider across connected environments and hubs (deduplicating the same account signed in on multiple machines).

@@ -1043,6 +1043,22 @@ describe("ClaudeAdapterV2 T3 tool instructions", () => {
   });
 });
 
+describe("ClaudeAdapterV2 turn cost", () => {
+  it("takes the turn's share of the process's running total_cost_usd", () => {
+    const process = {};
+    const anchor = { query: process, totalUsd: 0.25 };
+    assert.deepEqual(ClaudeAdapterV2.claudeTurnCost(anchor, { query: process, totalUsd: 0.75 }), {
+      costUsd: 0.5,
+    });
+    // A replacement process counts from zero; a total that went backwards is unknown.
+    assert.deepEqual(ClaudeAdapterV2.claudeTurnCost(anchor, { query: {}, totalUsd: 0.1 }), {
+      costUsd: 0.1,
+    });
+    assert.deepEqual(ClaudeAdapterV2.claudeTurnCost(anchor, { query: process, totalUsd: 0.1 }), {});
+    assert.deepEqual(ClaudeAdapterV2.claudeTurnCost(anchor, undefined), {});
+  });
+});
+
 const decodeProviderTurnTokenUsage = Schema.decodeSync(OrchestrationV2ProviderTurnTokenUsage);
 
 describe("ClaudeAdapterV2 context usage", () => {
