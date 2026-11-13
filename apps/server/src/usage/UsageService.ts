@@ -8,6 +8,7 @@ import {
   type UsagePricing,
   type UsageSummary,
   type UsageSummaryInput,
+  type TurnTokenUsage,
   UsageReadError,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -40,7 +41,12 @@ import type {
   UsageRecord,
 } from "@t3tools/provider-core/server/usage";
 import { canonicalModelFilter, resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
-import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
+import {
+  createOverrideRateTable,
+  parseRateTable,
+  priceTurnTokenUsage,
+  type RateTable,
+} from "./usagePricing.ts";
 import {
   listTranscriptFiles,
   readDirectoryVolumeId,
@@ -148,6 +154,11 @@ export class UsageService extends Context.Service<
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
     readonly refreshRates: Effect.Effect<UsagePricing>;
+    /** A finished turn's cost at list prices from the rates on hand; null when unpriced. Never fetches inline. */
+    readonly priceTurn: (input: {
+      readonly model: string;
+      readonly usage: TurnTokenUsage;
+    }) => Effect.Effect<number | null>;
   }
 >()("t3/usage/UsageService") {}
 
@@ -1140,7 +1151,21 @@ export const make = Effect.gen(function* () {
     return yield* Deferred.await(deferred);
   });
 
-  return { readSummary, refreshRates, awaitPersisted } as const;
+  const priceTurn = Effect.fn("UsageService.priceTurn")(function* (input: {
+    readonly model: string;
+    readonly usage: TurnTokenUsage;
+  }) {
+    yield* loadSavedRates;
+    // Ingestion must not wait on the network: refresh in the background, price with what is here.
+    if (ratesFetchedAtMs === null) yield* Effect.forkDetach(ensureRates(false));
+    const overrides = yield* settingsService.getSettings.pipe(
+      Effect.map((settings) => createOverrideRateTable(settings.usagePriceOverrides)),
+      Effect.orElseSucceed(() => undefined),
+    );
+    return priceTurnTokenUsage(rates, input.model, input.usage, overrides);
+  });
+
+  return { readSummary, refreshRates, priceTurn, awaitPersisted } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);

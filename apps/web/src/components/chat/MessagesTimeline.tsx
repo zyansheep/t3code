@@ -97,6 +97,7 @@ import { WorktreeSetupCard } from "./WorktreeSetupCard";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn } from "~/lib/utils";
+import { formatCostUsd } from "~/lib/formatCost";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
@@ -289,6 +290,8 @@ interface MessagesTimelineProps {
   supportsConversationRollback: boolean;
   threadStartCheckpointAvailable?: boolean;
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
+  /** Each run's API-equivalent cost, shown on its "Worked for" row. Unset hides cost. */
+  runCostsUsd?: ReadonlyMap<RunId, number> | undefined;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   onSendAppMessage?: (text: string) => Promise<void>;
@@ -390,6 +393,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   supportsConversationRollback,
   threadStartCheckpointAvailable = false,
   availableRevertTurnCounts,
+  runCostsUsd,
   onRevertToTurnCount,
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
   onSendAppMessage,
@@ -1130,6 +1134,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onForkFromRun,
     onToggleTurnFold,
     onToggleAttemptFold,
+    runCostsUsd,
     onToggleWorkGroup,
     onToggleWorkEntry: (anchorKey, collapsed, entryId) =>
       preserveDisclosurePosition(anchorKey, collapsed ? undefined : { entryId }),
@@ -1816,6 +1821,8 @@ function WorkHistorySkeleton() {
 
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
+  // Steer segments carry a derived run id, so only the turn's top row finds a cost.
+  const costUsd = ctx.runCostsUsd?.get(row.runId);
   const { loading, error, toggle } = useDeferredWorkLoading(row, () =>
     ctx.onToggleTurnFold(row.runId),
   );
@@ -1833,6 +1840,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         >
           <span>
             {row.label}
+            {costUsd === undefined ? "" : ` · ${formatCostUsd(costUsd)}`}
             {error ? ` · ${error}` : ""}
           </span>
           {row.expanded ? (

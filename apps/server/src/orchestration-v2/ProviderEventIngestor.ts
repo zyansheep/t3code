@@ -4,6 +4,7 @@ import {
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
   type OrchestrationV2PlanArtifact,
+  type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
@@ -21,6 +22,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlError from "effect/sql/SqlError";
 
@@ -38,6 +40,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import { makeProviderFailureTurnItem } from "@t3tools/provider-core/server/failure";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as UsageService from "../usage/UsageService.ts";
 import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
 import { boundFileChangeForStorage } from "./WireProjection.ts";
 
@@ -256,6 +259,26 @@ export const layer: Layer.Layer<
     const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
     const scope = yield* Effect.scope;
     const completedTurnAnalytics = new Set<string>();
+    // Optional so harnesses without usage still ingest; turns then carry only provider-reported cost.
+    const usage = yield* Effect.serviceOption(UsageService.UsageService);
+
+    // Prices a turn the provider did not, once its token usage arrives. A failed lookup leaves it unpriced.
+    const withTurnCost = (turn: OrchestrationV2ProviderTurn) => {
+      const tokenUsage = turn.turnTokenUsage;
+      const model = turn.model ?? tokenUsage?.models?.[0];
+      if (
+        Option.isNone(usage) ||
+        turn.costUsd !== undefined ||
+        tokenUsage === undefined ||
+        model === undefined
+      ) {
+        return Effect.succeed(turn);
+      }
+      return usage.value.priceTurn({ model, usage: tokenUsage }).pipe(
+        Effect.map((costUsd) => (costUsd === null ? turn : { ...turn, costUsd })),
+        Effect.orElseSucceed(() => turn),
+      );
+    };
 
     const makeDomainEvent =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
@@ -531,7 +554,7 @@ export const layer: Layer.Layer<
                 yield* makeDomainEvent(input, {
                   type: "provider-turn.updated",
                   ...(input.event.threadId === undefined ? {} : { threadId: input.event.threadId }),
-                  payload: input.event.providerTurn,
+                  payload: yield* withTurnCost(input.event.providerTurn),
                   nodeId: input.event.providerTurn.nodeId,
                 }),
               ];

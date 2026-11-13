@@ -92,6 +92,8 @@ export interface TimelineRowSharedState {
     | undefined;
   onToggleTurnFold: (runId: RunId) => void;
   onToggleAttemptFold: (attemptId: RunAttemptId) => void;
+  /** Each run's API-equivalent cost; unset when cost estimates are off. */
+  runCostsUsd: ReadonlyMap<RunId, number> | undefined;
   onFileOpen: (attachment: ChatFileAttachment) => void;
   onFileDownload: (attachment: ChatFileAttachment) => void;
   openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;

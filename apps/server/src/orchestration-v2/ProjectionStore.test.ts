@@ -3640,6 +3640,32 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
 
       const replaced = yield* projectionStore.getThreadProjection(threadId);
       assert.deepEqual(replaced.providerTurns[0]?.tokenUsage, replacementUsage);
+
+      // The shell totals the turns that carry a cost; the unpriced first turn adds nothing.
+      for (const [ordinal, costUsd] of [
+        [2, 0.5],
+        [3, 0.25],
+      ] as const) {
+        yield* projectionStore.apply({
+          id: EventId.make(`event:provider-usage-reload:priced-${ordinal}`),
+          type: "provider-turn.updated",
+          threadId,
+          nodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            ...providerTurn,
+            id: ProviderTurnId.make(`${providerTurnId}:${ordinal}`),
+            ordinal,
+            status: "completed",
+            completedAt: now,
+            costUsd,
+          },
+        });
+      }
+      assert.strictEqual((yield* projectionStore.getThreadShell(threadId))?.costUsd, 0.75);
+      const snapshot = yield* projectionStore.getShellSnapshot();
+      assert.strictEqual(snapshot.threads.find((thread) => thread.id === threadId)?.costUsd, 0.75);
     }),
   );
 

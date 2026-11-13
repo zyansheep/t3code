@@ -227,6 +227,8 @@ export const OrchestrationV2ContextTransferResolution = Schema.Union([
 export type OrchestrationV2ContextTransferResolution =
   typeof OrchestrationV2ContextTransferResolution.Type;
 
+const UsdAmount = Schema.Number.check(Schema.isFinite()).check(Schema.isGreaterThanOrEqualTo(0));
+
 export const OrchestrationV2ProviderTurnTokenUsage = Schema.Struct({
   usedTokens: NonNegativeInt,
   maxTokens: Schema.optional(Schema.NullOr(NonNegativeInt)),
@@ -1218,6 +1220,11 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
   turnTokenUsage: Schema.optional(TurnTokenUsage),
+  /**
+   * What the turn would cost at API list prices, in USD: the provider's own figure where it
+   * reports one, else priced from turnTokenUsage. Absent when unknown or unpriced.
+   */
+  costUsd: Schema.optional(UsdAmount),
   /** The model the provider reported running this turn's root agent, which can differ from the requested one. */
   model: Schema.optional(TrimmedNonEmptyString),
 });
@@ -2201,6 +2208,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   goal: Schema.optional(Schema.NullOr(OrchestrationV2ProviderGoal)),
+  /** Sum of the thread's provider turns' costUsd. Absent when no turn has one, and from older servers. */
+  costUsd: Schema.optional(UsdAmount),
   itemCount: NonNegativeInt,
   visibleItemCount: NonNegativeInt,
   createdAt: Schema.DateTimeUtc,

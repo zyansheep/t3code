@@ -2029,6 +2029,27 @@ function visibleItemCountForShell(input: {
   );
 }
 
+interface ShellCostRow {
+  readonly thread_id: string;
+  readonly cost_usd: number | null;
+}
+
+function shellCostMap(rows: ReadonlyArray<ShellCostRow>): ReadonlyMap<string, number> {
+  return new Map(
+    rows.flatMap((row) =>
+      row.cost_usd !== null && Number.isFinite(row.cost_usd) ? [[row.thread_id, row.cost_usd]] : [],
+    ),
+  );
+}
+
+function withShellCost(
+  shell: OrchestrationV2ThreadShell,
+  costs: ReadonlyMap<string, number>,
+): OrchestrationV2ThreadShell {
+  const costUsd = costs.get(shell.id);
+  return costUsd === undefined ? shell : { ...shell, costUsd };
+}
+
 function shellFromState(input: {
   readonly state: ShellThreadState;
   readonly visibleItemCount: number;
@@ -7863,6 +7884,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         WHERE per_run.run_key <> '' AND per_run.thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
       `;
 
+    const selectShellCosts = (threadIds: ReadonlyArray<ThreadId>) =>
+      sql<ShellCostRow>`
+        SELECT thread_id, SUM(json_extract(payload_json, '$.costUsd')) AS cost_usd
+        FROM orchestration_v2_projection_provider_turns
+        WHERE thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
+          AND json_extract(payload_json, '$.costUsd') IS NOT NULL
+        GROUP BY thread_id
+      `;
+
     const selectShellItemCounts = (threadIds: ReadonlyArray<ThreadId>) =>
       sql<ShellItemCountRow>`
         SELECT counts.thread_id,
@@ -8452,6 +8482,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         sequenceRows,
         providerThreadRows,
         pendingTurnItemRows,
+        costRows,
       ] = yield* Effect.all([
         readForThreadIds(selectShellRunRows, forkSourceIds),
         readForThreadIds(selectShellRunItemCounts, forkSourceIds),
@@ -8473,6 +8504,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ),
           ),
         ),
+        readForThreadIds(selectShellCosts),
       ]);
       return {
         targetThreadIds,
@@ -8483,6 +8515,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         sequenceRows,
         providerThreadRows,
         pendingTurnItemRows,
+        costRows,
       };
     });
 
@@ -8495,7 +8528,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       sequenceRows,
       providerThreadRows,
       pendingTurnItemRows,
+      costRows,
     }: Effect.Success<ReturnType<typeof readShellSnapshotRows>>) {
+      const costs = shellCostMap(costRows);
       const { runsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
         runRows,
         itemCountRows,
@@ -8518,13 +8553,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       const shells = states
         .filter((state) => targetThreadIds.has(state.thread.id))
         .map((state) =>
-          shellFromState({
-            state,
-            visibleItemCount: visibleItemCountForShell({
-              threadId: state.thread.id,
-              statesByThreadId,
+          withShellCost(
+            shellFromState({
+              state,
+              visibleItemCount: visibleItemCountForShell({
+                threadId: state.thread.id,
+                statesByThreadId,
+              }),
             }),
-          }),
+            costs,
+          ),
         );
 
       return {
@@ -8895,6 +8933,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               shellItemCountRows,
               providerThreadRows,
               pendingTurnItemRows,
+              costRows,
             ] = yield* Effect.all([
               forkSourceIds.length === 0
                 ? Effect.succeed([] as ReadonlyArray<ShellRunRow>)
@@ -8912,6 +8951,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     : [],
                 ),
               ),
+              selectShellCosts([threadId]),
             ]);
             const { runsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
               runRows,
@@ -8936,10 +8976,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             if (state === undefined) {
               return null;
             }
-            return shellFromState({
-              state,
-              visibleItemCount: visibleItemCountForShell({ threadId, statesByThreadId }),
-            });
+            return withShellCost(
+              shellFromState({
+                state,
+                visibleItemCount: visibleItemCountForShell({ threadId, statesByThreadId }),
+              }),
+              shellCostMap(costRows),
+            );
           }),
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));

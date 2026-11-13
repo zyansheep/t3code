@@ -1543,6 +1543,22 @@ export function deriveAvailableRevertTurnCounts(projection: ThreadStructure | nu
   return available;
 }
 
+/** Each run's API-equivalent cost: the sum over its attempts' provider turns that carry one. */
+export function deriveRunCostsUsd(projection: ThreadStructure | null): ReadonlyMap<RunId, number> {
+  const costs = new Map<RunId, number>();
+  if (projection === null) return costs;
+  const runIdByAttemptId = new Map(
+    projection.attempts.map((attempt) => [attempt.id, attempt.runId]),
+  );
+  for (const turn of projection.providerTurns) {
+    if (turn.costUsd === undefined || turn.runAttemptId === null) continue;
+    const runId = runIdByAttemptId.get(turn.runAttemptId);
+    if (runId === undefined) continue;
+    costs.set(runId, (costs.get(runId) ?? 0) + turn.costUsd);
+  }
+  return costs;
+}
+
 /** An imported native session is bound before it has messages or runs, and its cwd is fixed. */
 export function isThreadEnvironmentLocked(input: {
   readonly messageCount: number;

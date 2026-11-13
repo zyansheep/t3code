@@ -817,6 +817,22 @@ describe("ClaudeAdapterV2 device instructions", () => {
   });
 });
 
+describe("ClaudeAdapterV2 turn cost", () => {
+  it("takes the turn's share of the process's running total_cost_usd", () => {
+    const process = {};
+    const anchor = { query: process, totalUsd: 0.25 };
+    assert.deepEqual(ClaudeAdapterV2.claudeTurnCost(anchor, { query: process, totalUsd: 0.75 }), {
+      costUsd: 0.5,
+    });
+    // A replacement process counts from zero; a total that went backwards is unknown.
+    assert.deepEqual(ClaudeAdapterV2.claudeTurnCost(anchor, { query: {}, totalUsd: 0.1 }), {
+      costUsd: 0.1,
+    });
+    assert.deepEqual(ClaudeAdapterV2.claudeTurnCost(anchor, { query: process, totalUsd: 0.1 }), {});
+    assert.deepEqual(ClaudeAdapterV2.claudeTurnCost(anchor, undefined), {});
+  });
+});
+
 describe("ClaudeAdapterV2 context usage", () => {
   it("dates cache expiry from the request start, not the response end", () => {
     const usage = ClaudeAdapterV2.claudeProviderTurnTokenUsage(

@@ -7,6 +7,7 @@ import {
   createOverrideRateTable,
   lookupRate,
   parseRateTable,
+  priceTurnTokenUsage,
   priceUsage,
 } from "./usagePricing.ts";
 
@@ -53,6 +54,26 @@ describe("usage pricing", () => {
       });
     }
     expect(cacheSavingsUsd(table, record("example-model"), overrides)).toBe(1.5);
+  });
+
+  it("prices a finished turn's tokens, with cache reads and writes split out of its input", () => {
+    const table = parseRateTable({ "example-model": rate(1e-6, 0.1e-6) });
+    const turn = {
+      usageScope: "main_agent",
+      usageStatus: "complete",
+      hasSubagents: false,
+      // 1M uncached, 2M cache reads, 0 cache writes.
+      inputTokens: 3_000_000,
+      cachedInputTokens: 2_000_000,
+      cacheCreationTokens: 0,
+      outputTokens: 1_000_000,
+    } as const;
+    expect(priceTurnTokenUsage(table, "example-model", turn)).toBeCloseTo(1 + 0.2 + 5);
+    expect(priceTurnTokenUsage(table, "unknown-model", turn)).toBeNull();
+    expect(
+      priceTurnTokenUsage(table, "example-model", { ...turn, usageStatus: "partial" }),
+    ).toBeNull();
+    expect(priceTurnTokenUsage(table, "example-model", { ...turn, localCommand: true })).toBeNull();
   });
 
   it("prices Cursor cache savings at the base model rate", () => {

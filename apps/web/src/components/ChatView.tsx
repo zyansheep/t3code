@@ -13,6 +13,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-activity-announcement";
 import {
   deriveAvailableRevertTurnCounts,
+  deriveRunCostsUsd,
   deriveThreadPendingBackgroundTasks,
   presentThreadShellFromProjection,
 } from "./ChatView.logic";
@@ -1629,6 +1630,8 @@ export default function ChatView(props: ChatViewProps) {
   );
   const turnDiffSummaries = useThreadCheckpointSummaries(routeThreadDetailRef);
   const availableRevertTurnCounts = deriveAvailableRevertTurnCounts(serverProjection);
+  const costEstimatesEnabled = useClientSettings((settings) => settings.costEstimatesEnabled);
+  const runCostsUsd = costEstimatesEnabled ? deriveRunCostsUsd(serverProjection) : undefined;
   // A paged history window cannot identify the first loaded run as the thread start.
   const threadStartCheckpointAvailable =
     !serverThreadHistory.hasMoreHistory &&
@@ -3493,6 +3496,7 @@ export default function ChatView(props: ChatViewProps) {
                   supportsConversationRollback={supportsConversationRollback}
                   threadStartCheckpointAvailable={threadStartCheckpointAvailable}
                   availableRevertTurnCounts={availableRevertTurnCounts}
+                  runCostsUsd={runCostsUsd}
                   onRevertToTurnCount={onRevertTimelineTurnStable}
                   onUseArtifactTemplate={insertArtifactTemplateStable}
                   onSendAppMessage={sendAppMessageStable}

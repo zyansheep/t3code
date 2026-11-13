@@ -75,6 +75,8 @@ import { vcsEnvironment, vcsBranchRevalidation } from "../../state/vcs";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { formatRelativeTimeLabel, parseTimestampDate } from "../../timestampFormat";
+import { useClientSettings } from "../../hooks/useSettings";
+import { formatCostUsd } from "../../lib/formatCost";
 import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
@@ -150,6 +152,18 @@ function RelativeTimeLabel(props: { timestamp: string | null }) {
     : compactSidebarTimeLabel(
         formatRelativeTimeLabel(props.timestamp, Date.parse(`${nowMinute}:00.000Z`)),
       );
+}
+
+// The thread's API-equivalent cost before its time, when cost estimates are on.
+function ThreadCostLabel(props: { costUsd: number | undefined }) {
+  const enabled = useClientSettings((settings) => settings.costEstimatesEnabled);
+  if (!enabled || props.costUsd === undefined) return null;
+  return (
+    <>
+      <span>{formatCostUsd(props.costUsd)}</span>
+      <span aria-hidden> · </span>
+    </>
+  );
 }
 
 function JumpHintBadge(props: { label: string }) {
@@ -1335,6 +1349,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       </span>
                     ) : (
                       <span className="text-xs">
+                        <ThreadCostLabel costUsd={thread.source.costUsd} />
                         <RelativeTimeLabel
                           timestamp={
                             variantAction === "unsettle"
@@ -1534,7 +1549,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         </span>
                       )
                     ) : (
-                      <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
+                      <>
+                        <ThreadCostLabel costUsd={thread.source.costUsd} />
+                        <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
+                      </>
                     )}
                   </span>
                   {props.settlementSupported || showSnoozeButton || hasUnsentDraft ? (

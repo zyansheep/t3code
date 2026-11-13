@@ -7,6 +7,7 @@ import {
   snapshotComposerSend,
   withMessageContext,
   deriveAvailableRevertTurnCounts,
+  deriveRunCostsUsd,
   deriveThreadPendingBackgroundTasks,
 } from "./ChatView.logic";
 import {
@@ -1286,6 +1287,29 @@ describe("deriveAvailableRevertTurnCounts", () => {
   it("offers nothing without a provider session to rewind", () => {
     expect(deriveAvailableRevertTurnCounts(projection({ providerSessionId: null })).size).toBe(0);
     expect(deriveAvailableRevertTurnCounts(null).size).toBe(0);
+  });
+});
+
+describe("deriveRunCostsUsd", () => {
+  it("sums each run's priced provider turns across its attempts", () => {
+    const base = makeThreadProjectionFixture();
+    const costs = deriveRunCostsUsd({
+      ...base,
+      attempts: [
+        { id: "attempt-1", runId: "run-1" },
+        { id: "attempt-2", runId: "run-1" },
+        { id: "attempt-3", runId: "run-2" },
+      ],
+      providerTurns: [
+        { runAttemptId: "attempt-1", costUsd: 0.5 },
+        { runAttemptId: "attempt-2", costUsd: 0.25 },
+        // Unpriced and runless turns add nothing.
+        { runAttemptId: "attempt-3" },
+        { runAttemptId: null, costUsd: 9 },
+      ],
+    } as unknown as ReturnType<typeof makeThreadProjectionFixture>);
+    expect([...costs]).toEqual([[RunId.make("run-1"), 0.75]]);
+    expect(deriveRunCostsUsd(null).size).toBe(0);
   });
 });
 

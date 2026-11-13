@@ -47,6 +47,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderUsageAnalytics from "../telemetry/ProviderUsageAnalytics.ts";
+import * as UsageService from "../usage/UsageService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -323,6 +324,78 @@ it.effect("refreshes the failing instance snapshot after a committed usage_limit
     }).pipe(Effect.provide(makeLayerTest(layerTestEventSink, instances)));
   }),
 );
+
+it.effect("prices a turn its provider did not, and keeps a cost the provider reported", () => {
+  const pricedModels: Array<string> = [];
+  const layerUsage = Layer.mock(UsageService.UsageService)({
+    priceTurn: ({ model }) =>
+      Effect.sync(() => {
+        pricedModels.push(model);
+        return model === "priced-model" ? 1.25 : null;
+      }),
+  });
+  return Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+    const idAllocator = yield* IdAllocator.IdAllocatorV2;
+    const threadEvent = yield* threadCreatedEvent(now);
+    yield* eventSink.write({ events: [threadEvent] });
+    const providerSessionId = yield* idAllocator.allocate.providerSession({
+      providerInstanceId: modelSelection.instanceId,
+      threadId: threadEvent.threadId,
+    });
+    const providerThreadId = idAllocator.derive.providerThread({
+      driver: CODEX_DRIVER,
+      nativeThreadId: "priced-thread",
+    });
+    const costOf = (ordinal: number, turn: { readonly model: string; readonly costUsd?: number }) =>
+      ingestor
+        .normalize({
+          providerSessionId,
+          providerInstanceId: modelSelection.instanceId,
+          threadId: threadEvent.threadId,
+          event: {
+            type: "provider_turn.updated",
+            driver: CODEX_DRIVER,
+            providerTurn: {
+              id: idAllocator.derive.providerTurn({
+                driver: CODEX_DRIVER,
+                nativeTurnId: `priced-turn-${ordinal}`,
+              }),
+              providerThreadId,
+              nodeId: NodeId.make(`node:priced-turn-${ordinal}`),
+              runAttemptId: null,
+              nativeTurnRef: null,
+              ordinal,
+              status: "completed",
+              startedAt: now,
+              completedAt: now,
+              turnTokenUsage: {
+                usageStatus: "complete",
+                usageScope: "main_agent",
+                hasSubagents: false,
+                inputTokens: 40,
+                outputTokens: 10,
+              },
+              ...turn,
+            },
+          },
+        })
+        .pipe(
+          Effect.map((events) =>
+            events.flatMap((event) =>
+              event.type === "provider-turn.updated" ? [event.payload.costUsd] : [],
+            ),
+          ),
+        );
+
+    assert.deepEqual(yield* costOf(1, { model: "priced-model" }), [1.25]);
+    assert.deepEqual(yield* costOf(2, { model: "unknown-model" }), [undefined]);
+    assert.deepEqual(yield* costOf(3, { model: "priced-model", costUsd: 0.5 }), [0.5]);
+    assert.deepEqual(pricedModels, ["priced-model", "unknown-model"]);
+  }).pipe(Effect.provide(layerTest.pipe(Layer.provide(layerUsage))));
+});
 
 it.effect("records accepted billed turn usage once without billing the context window", () => {
   const recorded: Array<ProviderUsageAnalytics.ProviderTurnReport> = [];

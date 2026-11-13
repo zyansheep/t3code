@@ -1,4 +1,5 @@
 import type {
+  TurnTokenUsage,
   UsageCategoryCost,
   UsageCostSource,
   UsageModelPriceOverride,
@@ -404,4 +405,39 @@ export function cacheSavingsUsd(
   if (rate === null) return 0;
   const rates = ratesAt(rate, record.speed, record.totals);
   return record.totals.cachedInputTokens * (rates.inputCostPerToken - rates.cacheReadCostPerToken);
+}
+
+/**
+ * A finished turn's main-agent tokens at list prices, or null when its model has no price or its
+ * counts are incomplete. Input counts include cache reads and writes; output includes reasoning.
+ */
+export function priceTurnTokenUsage(
+  table: RateTable,
+  model: string,
+  usage: TurnTokenUsage,
+  overrides?: RateTable,
+): number | null {
+  if (usage.usageStatus !== "complete" || usage.localCommand === true) return null;
+  const cachedInputTokens = usage.cachedInputTokens ?? 0;
+  const cacheCreationTokens = usage.cacheCreationTokens ?? 0;
+  const priced = priceUsage(
+    table,
+    {
+      model,
+      totals: {
+        uncachedInputTokens: Math.max(
+          0,
+          usage.inputTokens - cachedInputTokens - cacheCreationTokens,
+        ),
+        cachedInputTokens,
+        cacheCreationTokens,
+        outputTokens: usage.outputTokens,
+        reasoningTokens: usage.reasoningTokens ?? 0,
+      },
+      speed: "standard",
+      reportedCostUsd: null,
+    },
+    overrides,
+  );
+  return priced.costSource === "unpriced" ? null : priced.costUsd;
 }
