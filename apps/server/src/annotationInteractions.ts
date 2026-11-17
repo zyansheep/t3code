@@ -1,6 +1,6 @@
 import {
   AnnotationEnglish,
-  type AnnotationEnglishSetInput,
+  AnnotationEnglishSetInput,
   AnnotationIntensity,
   type AnnotationIntensityAdjustInput,
   AnnotationIntensityError,
@@ -10,13 +10,23 @@ import {
   AnnotationReviewError,
   type AnnotationReviewNextInput,
   AnnotationReviewNextResult,
-  type AnnotationStatus,
+  AnnotationStatus,
 } from "@t3tools/contracts";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientRequest } from "effect/http";
+
+import * as ServerConfig from "./config.ts";
 
 /** Where chat `<abbr>` popover interactions go: an external collector, for example a language-learning tool. */
 const AnnotationEventsUrl = Config.String("T3CODE_ANNOTATION_EVENTS_URL").pipe(
@@ -101,6 +111,21 @@ const decodeIntensityAnswer = Schema.decodeUnknownOption(
   }),
 );
 const ENGLISH_OFF = { on: false, until: 0, at: 0 } satisfies AnnotationEnglish;
+const NORMAL = { level: 0, until: 0 } satisfies AnnotationIntensity;
+const UNREACHABLE = "collector unreachable";
+
+/** How long the collector has to answer before it counts as out of reach. */
+const COLLECTOR_TIMEOUT = "3 seconds";
+// As the collector keeps them: a level lasts 3 hours from its press, English only an hour, and a press past off or
+// full stays there.
+const LEVEL_MS = 3 * 60 * 60_000;
+const ENGLISH_MS = 60 * 60_000;
+const LOWEST_LEVEL = -3;
+const HIGHEST_LEVEL = 3;
+/** The most ops the collector's `POST /v1/ops` takes in one request. */
+const OPS_PER_POST = 100;
+/** The most presses kept for the collector; past it the oldest go, so a long time out of reach can't grow the file. */
+const MOST_QUEUED = 500;
 
 /** `path` at the origin of `T3CODE_ANNOTATION_EVENTS_URL`, or why there is none. */
 const intensityEndpoint = Effect.fnUntraced(function* (path: string) {
@@ -112,91 +137,333 @@ const intensityEndpoint = Effect.fnUntraced(function* (path: string) {
   });
 });
 
-/** Sends `request` and decodes the answer; a refusal fails with the collector's own error, else its status. */
-const askIntensityCollector = Effect.fnUntraced(function* (
-  request: HttpClientRequest.HttpClientRequest,
-) {
-  const response = yield* (yield* HttpClient.HttpClient).execute(request);
-  const answer = Option.getOrUndefined(
-    Option.flatMap(yield* Effect.option(response.json), decodeIntensityAnswer),
-  );
-  const refusal = () => {
-    const reason = answer?.error?.trim();
-    return new AnnotationIntensityError({
-      detail: reason ? reason : `collector answered ${response.status}`,
-    });
-  };
-  return { answer: response.status === 200 && answer?.ok === true ? answer : undefined, refusal };
-});
+interface CollectorReply {
+  readonly status: number;
+  readonly json: unknown;
+}
+
+/** Sends `request` to the collector: its status and JSON, or none when no answer came in time. */
+const askCollector = Effect.fnUntraced(
+  function* (request: HttpClientRequest.HttpClientRequest) {
+    const response = yield* (yield* HttpClient.HttpClient).execute(request);
+    const json = yield* Effect.option(response.json);
+    return { status: response.status, json: Option.getOrUndefined(json) } satisfies CollectorReply;
+  },
+  Effect.timeoutOption(COLLECTOR_TIMEOUT),
+  Effect.orElseSucceed(() => Option.none<CollectorReply>()),
+);
+
+/** The collector's answer when it took the request, else `undefined`. */
+const intensityAnswer = (reply: CollectorReply) => {
+  const answer = Option.getOrUndefined(decodeIntensityAnswer(reply.json));
+  return reply.status === 200 && answer?.ok === true ? answer : undefined;
+};
+
+/** A refusal fails with the collector's own error, else its status. */
+const refusal = (reply: CollectorReply) => {
+  const reason = Option.getOrUndefined(decodeIntensityAnswer(reply.json))?.error?.trim();
+  return new AnnotationIntensityError({
+    detail: reason ? reason : `collector answered ${reply.status}`,
+  });
+};
 
 const asIntensityError = Effect.mapError((error: unknown) =>
-  isIntensityError(error)
-    ? error
-    : new AnnotationIntensityError({ detail: "collector unreachable" }),
+  isIntensityError(error) ? error : new AnnotationIntensityError({ detail: UNREACHABLE }),
+);
+
+const Stamp = {
+  uid: Schema.String,
+  day: Schema.String,
+  at: Schema.Int,
+  machine: Schema.String,
+};
+const QueuedLevel = Schema.Struct({
+  level: AnnotationIntensity.fields.level,
+  until: Schema.Int,
+  at: Schema.Int,
+  source: Schema.String,
+});
+
+/**
+ * A press the collector has not taken yet, as the op the collector records for it: a `set` of the dial's level, or an
+ * `english` switch with the messages on screen. Sent later, it carries the time of the press and its uid, so a resend
+ * after a lost answer is applied once.
+ */
+const QueuedPress = Schema.Union([
+  Schema.Struct({
+    ...Stamp,
+    kind: Schema.Literal("set"),
+    prefs: Schema.Struct({
+      intensity_chat: Schema.optional(QueuedLevel),
+      intensity_sentences: Schema.optional(QueuedLevel),
+    }),
+  }),
+  Schema.Struct({
+    ...Stamp,
+    kind: Schema.Literal("english"),
+    on: Schema.Boolean,
+    until: Schema.Int,
+    source: Schema.String,
+    contexts: AnnotationEnglishSetInput.fields.contexts,
+  }),
+]);
+type QueuedPress = typeof QueuedPress.Type;
+
+/** The status the collector last gave, with the presses made since, and those presses until the collector has them. */
+const KeptStatus = Schema.Struct({
+  status: Schema.NullOr(AnnotationStatus),
+  queued: Schema.Array(QueuedPress),
+});
+type KeptStatus = typeof KeptStatus.Type;
+const decodeKeptStatus = Schema.decodeUnknownOption(Schema.fromJsonString(KeptStatus));
+const NOTHING_KEPT: KeptStatus = { status: null, queued: [] };
+
+const KEPT_FILE = "annotation-status.json";
+// One process serves every client, so this orders every read and press on the file.
+const keptLock = Semaphore.makeUnsafe(1);
+
+const keptPath = Effect.gen(function* () {
+  const { stateDir } = yield* ServerConfig.ServerConfig;
+  return (yield* Path.Path).join(stateDir, KEPT_FILE);
+});
+
+/** What is kept; a missing file keeps nothing, and so does an unreadable one, after a warning. */
+const readKept = Effect.fnUntraced(function* (file: string) {
+  const text = yield* Effect.option((yield* FileSystem.FileSystem).readFileString(file));
+  if (Option.isNone(text)) return NOTHING_KEPT;
+  const kept = decodeKeptStatus(text.value);
+  if (Option.isSome(kept)) return kept.value;
+  yield* Effect.logWarning("chat Japanese status file is unreadable; starting it again", { file });
+  return NOTHING_KEPT;
+});
+
+const writeKept = (file: string, kept: KeptStatus) =>
+  writeFileStringAtomically({ filePath: file, contents: `${JSON.stringify(kept)}\n` });
+
+/** `effect` with the file read and nothing else reading or writing it meanwhile. */
+const withKept = <A, E, R>(effect: (file: string, kept: KeptStatus) => Effect.Effect<A, E, R>) =>
+  keptLock.withPermits(1)(
+    Effect.gen(function* () {
+      const file = yield* keptPath;
+      return yield* effect(file, yield* readKept(file));
+    }),
+  );
+
+const machineName = Effect.map(HostProcess.Hostname, (name) => name.slice(0, 64) || "t3");
+
+/** A press made at `now`, stamped as the collector's ops are: its day is this machine's. */
+const stamped = Effect.fnUntraced(function* (now: number) {
+  return {
+    uid: yield* (yield* SecureRandom.SecureRandom).uuidV4(),
+    day: DateTime.formatIsoDate(
+      DateTime.setZone(DateTime.makeUnsafe(now), DateTime.zoneMakeLocal()),
+    ),
+    at: now,
+    machine: yield* machineName,
+  };
+});
+
+const keep = (kept: KeptStatus, press: QueuedPress): ReadonlyArray<QueuedPress> =>
+  [...kept.queued, press].slice(-MOST_QUEUED);
+
+const levelAt = (level: AnnotationIntensity, now: number): AnnotationIntensity =>
+  level.level !== 0 && level.until <= now ? NORMAL : level;
+
+/** The status as the collector would answer at `now`: English only and each level end when their time is up. */
+const statusAt = (status: AnnotationStatus, now: number): AnnotationStatus => ({
+  intensity: levelAt(status.intensity, now),
+  english:
+    status.english.on && status.english.until <= now
+      ? { on: false, until: 0, at: status.english.at }
+      : status.english,
+  ...(status.sentences === undefined ? {} : { sentences: levelAt(status.sentences, now) }),
+});
+
+const sameLevel = (a: AnnotationIntensity | undefined, b: AnnotationIntensity | undefined) =>
+  a?.level === b?.level && a?.until === b?.until;
+
+const sameStatus = (a: AnnotationStatus, b: AnnotationStatus | null) =>
+  b !== null &&
+  sameLevel(a.intensity, b.intensity) &&
+  sameLevel(a.sentences, b.sentences) &&
+  a.english.on === b.english.on &&
+  a.english.until === b.english.until &&
+  a.english.at === b.english.at;
+
+const withDial = (
+  status: AnnotationStatus,
+  surface: "chat" | "sentences",
+  level: AnnotationIntensity,
+): AnnotationStatus =>
+  surface === "chat" ? { ...status, intensity: level } : { ...status, sentences: level };
+
+const decodeOpsAnswer = Schema.decodeUnknownOption(
+  Schema.Struct({
+    ok: Schema.Literal(true),
+    results: Schema.Array(
+      Schema.Struct({ ok: Schema.Boolean, error: Schema.optional(Schema.String) }),
+    ),
+  }),
 );
 
 /**
- * Asks the collector at the origin of `T3CODE_ANNOTATION_EVENTS_URL` to make chat's words (`surface: "chat"`, the
- * default) or sentences (`"sentences"`) heavier (`step: 1`) or lighter (`-1`) for a while, with `POST /v1/intensity`,
- * and returns that dial's new level and when it ends. Fails with a reason short enough to show: `not configured`, the
- * collector's own error (a collector with one level for both refuses the sentences), or `collector unreachable`.
+ * Sends the kept presses to the collector's `POST /v1/ops`, oldest first, and returns those still waiting: all from the
+ * first batch it does not take. A press it refuses goes too, since sending it again would not mend it.
  */
-export const adjustAnnotationIntensity = Effect.fn("adjustAnnotationIntensity")(
-  function* (input: AnnotationIntensityAdjustInput) {
-    const url = yield* intensityEndpoint("/v1/intensity");
+const sendQueued = Effect.fnUntraced(function* (queued: ReadonlyArray<QueuedPress>) {
+  if (queued.length === 0) return queued;
+  const url = yield* intensityEndpoint("/v1/ops");
+  const machine = yield* machineName;
+  let left = queued;
+  while (left.length > 0) {
+    const batch = left.slice(0, OPS_PER_POST);
     const request = yield* HttpClientRequest.post(url).pipe(
-      HttpClientRequest.bodyJson({
-        surface: input.surface ?? "chat",
-        step: input.step,
-        source: "t3",
-      }),
+      HttpClientRequest.bodyJson({ machine, ops: batch }),
     );
-    const { answer, refusal } = yield* askIntensityCollector(request);
-    if (answer?.intensity === undefined) return yield* refusal();
-    return answer.intensity;
-  },
-  Effect.timeout("3 seconds"),
-  asIntensityError,
-);
+    const reply = yield* askCollector(request);
+    const results =
+      Option.isSome(reply) && reply.value.status === 200
+        ? Option.getOrUndefined(decodeOpsAnswer(reply.value.json))?.results
+        : undefined;
+    if (results?.length !== batch.length) break;
+    for (const [index, result] of results.entries()) {
+      if (result.ok) continue;
+      yield* Effect.logWarning(
+        "the collector refused a chat Japanese press kept while out of reach",
+        {
+          kind: batch[index]?.kind,
+          error: result.error,
+        },
+      );
+    }
+    left = left.slice(batch.length);
+  }
+  return left;
+});
 
 /**
- * Reads the collector's chat levels and English-only state with `GET /v1/intensity?surface=chat`: the word level, and
- * the sentence level from a collector with two (one with one level for both answers without it, and the status has
- * none). A collector that predates English only answers without it, which reads as off. Fails like
- * `adjustAnnotationIntensity`.
+ * Steps chat's words (`surface: "chat"`) or sentences heavier or lighter with the collector's `POST /v1/intensity`, and
+ * returns that dial's new level. Out of reach, or with presses still waiting, the press is made here from the status
+ * last known and kept until a status read reaches the collector. Fails as `not configured` or with the collector's error.
  */
-export const getAnnotationStatus = Effect.fn("getAnnotationStatus")(
-  function* () {
-    const url = yield* intensityEndpoint("/v1/intensity?surface=chat");
-    const { answer, refusal } = yield* askIntensityCollector(HttpClientRequest.get(url));
-    if (answer?.intensity === undefined) return yield* refusal();
-    return {
-      intensity: answer.intensity,
-      english: answer.english ?? ENGLISH_OFF,
-      ...(answer.sentences === undefined ? {} : { sentences: answer.sentences }),
-    } satisfies AnnotationStatus;
-  },
-  Effect.timeout("3 seconds"),
-  asIntensityError,
-);
+export const adjustAnnotationIntensity = Effect.fn("adjustAnnotationIntensity")(function* (
+  input: AnnotationIntensityAdjustInput,
+) {
+  const surface = input.surface ?? "chat";
+  const url = yield* intensityEndpoint("/v1/intensity");
+  return yield* withKept((file, kept) =>
+    Effect.gen(function* () {
+      if (kept.queued.length === 0) {
+        const request = yield* HttpClientRequest.post(url).pipe(
+          HttpClientRequest.bodyJson({ surface, step: input.step, source: "t3" }),
+        );
+        const reply = yield* askCollector(request);
+        if (Option.isSome(reply)) {
+          const level = intensityAnswer(reply.value)?.intensity;
+          if (level === undefined) return yield* refusal(reply.value);
+          if (kept.status) {
+            yield* writeKept(file, { ...kept, status: withDial(kept.status, surface, level) });
+          }
+          return level;
+        }
+      }
+      const now = yield* Clock.currentTimeMillis;
+      const status = statusAt(kept.status ?? { intensity: NORMAL, english: ENGLISH_OFF }, now);
+      const from = surface === "chat" ? status.intensity : (status.sentences ?? status.intensity);
+      const next = Math.max(LOWEST_LEVEL, Math.min(HIGHEST_LEVEL, from.level + input.step));
+      const level = { level: next, until: next === 0 ? 0 : now + LEVEL_MS };
+      const value = { ...level, at: now, source: "t3" };
+      const press = {
+        ...(yield* stamped(now)),
+        kind: "set" as const,
+        prefs: surface === "chat" ? { intensity_chat: value } : { intensity_sentences: value },
+      };
+      yield* writeKept(file, {
+        status: withDial(status, surface, level),
+        queued: keep(kept, press),
+      });
+      return level;
+    }),
+  );
+}, asIntensityError);
+
+/**
+ * Sends the presses kept here, then reads the word level, the sentence level (none from a collector with one dial) and
+ * English only (off from a collector without it) with `GET /v1/intensity?surface=chat`. Out of reach, it answers with
+ * the status kept here, run out as the collector's would, or fails as `collector unreachable` when none is known yet.
+ */
+export const getAnnotationStatus = Effect.fn("getAnnotationStatus")(function* () {
+  const url = yield* intensityEndpoint("/v1/intensity?surface=chat");
+  return yield* withKept((file, kept) =>
+    Effect.gen(function* () {
+      const queued = yield* sendQueued(kept.queued);
+      const reply =
+        queued.length === 0
+          ? yield* askCollector(HttpClientRequest.get(url))
+          : Option.none<CollectorReply>();
+      if (Option.isNone(reply)) {
+        if (queued.length !== kept.queued.length) yield* writeKept(file, { ...kept, queued });
+        if (kept.status === null) {
+          return yield* new AnnotationIntensityError({ detail: UNREACHABLE });
+        }
+        return statusAt(kept.status, yield* Clock.currentTimeMillis);
+      }
+      const answer = intensityAnswer(reply.value);
+      if (answer?.intensity === undefined) {
+        if (queued.length !== kept.queued.length) yield* writeKept(file, { ...kept, queued });
+        return yield* refusal(reply.value);
+      }
+      const status = {
+        intensity: answer.intensity,
+        english: answer.english ?? ENGLISH_OFF,
+        ...(answer.sentences === undefined ? {} : { sentences: answer.sentences }),
+      } satisfies AnnotationStatus;
+      if (!sameStatus(status, kept.status) || queued !== kept.queued) {
+        yield* writeKept(file, { status, queued });
+      }
+      return status;
+    }),
+  );
+}, asIntensityError);
 
 /**
  * Turns English only on or off at the collector with `POST /v1/english`, sending the messages on screen, and returns
- * its new state. Fails like `adjustAnnotationIntensity`.
+ * its new state. While the collector is out of reach, the press is made and kept here, as for a level.
  */
-export const setAnnotationEnglish = Effect.fn("setAnnotationEnglish")(
-  function* (input: AnnotationEnglishSetInput) {
-    const url = yield* intensityEndpoint("/v1/english");
-    const request = yield* HttpClientRequest.post(url).pipe(
-      HttpClientRequest.bodyJson({ on: input.on, source: "t3", contexts: input.contexts }),
-    );
-    const { answer, refusal } = yield* askIntensityCollector(request);
-    if (answer?.english === undefined) return yield* refusal();
-    return answer.english;
-  },
-  Effect.timeout("3 seconds"),
-  asIntensityError,
-);
+export const setAnnotationEnglish = Effect.fn("setAnnotationEnglish")(function* (
+  input: AnnotationEnglishSetInput,
+) {
+  const url = yield* intensityEndpoint("/v1/english");
+  return yield* withKept((file, kept) =>
+    Effect.gen(function* () {
+      if (kept.queued.length === 0) {
+        const request = yield* HttpClientRequest.post(url).pipe(
+          HttpClientRequest.bodyJson({ on: input.on, source: "t3", contexts: input.contexts }),
+        );
+        const reply = yield* askCollector(request);
+        if (Option.isSome(reply)) {
+          const english = intensityAnswer(reply.value)?.english;
+          if (english === undefined) return yield* refusal(reply.value);
+          if (kept.status) yield* writeKept(file, { ...kept, status: { ...kept.status, english } });
+          return english;
+        }
+      }
+      const now = yield* Clock.currentTimeMillis;
+      const english = { on: input.on, until: input.on ? now + ENGLISH_MS : 0, at: now };
+      const press = {
+        ...(yield* stamped(now)),
+        kind: "english" as const,
+        on: english.on,
+        until: english.until,
+        source: "t3",
+        contexts: input.contexts,
+      };
+      const status = statusAt(kept.status ?? { intensity: NORMAL, english: ENGLISH_OFF }, now);
+      yield* writeKept(file, { status: { ...status, english }, queued: keep(kept, press) });
+      return english;
+    }),
+  );
+}, asIntensityError);
 
 const isReviewError = Schema.is(AnnotationReviewError);
 const decodeReviewAnswer = Schema.decodeUnknownOption(
