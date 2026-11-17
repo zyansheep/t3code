@@ -2230,8 +2230,10 @@ function ChatMarkdown({
   const markdown = wordsOptions(extensions, markdownFlags);
   const blocks = streamingBlocks ?? [text];
   // Only the last block of a streaming reply is still being written; a tag still arriving at its end is cut, whether
-  // or not the reply has levels yet.
-  const isWriting = (index: number) => props.isStreaming === true && index === blocks.length - 1;
+  // or not the reply has levels yet. A block with no tag in it renders the same either way, so it keeps the renderer
+  // it finishes with and is parsed once.
+  const isWriting = (index: number) =>
+    props.isStreaming === true && index === blocks.length - 1 && blocks[index]!.includes("<");
   // Only messages with raw <abbr> markup mount the shared expansion popover.
   const hasAbbreviations = parseRawHtml && /<abbr\b/i.test(text);
   // A message that carries its Japanese at every level renders at the reader's current one.
