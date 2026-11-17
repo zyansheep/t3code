@@ -1,3 +1,4 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   type AnnotationIntensityAdjustInput,
@@ -5,10 +6,16 @@ import {
   type AnnotationReviewNextInput,
 } from "@t3tools/contracts";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import { describe } from "vite-plus/test";
+
+import * as ServerConfig from "./config.ts";
 
 import {
   adjustAnnotationIntensity,
@@ -19,6 +26,20 @@ import {
 } from "./annotationInteractions.ts";
 
 const COLLECTOR = "http://collector.test:7853/v1/interactions";
+
+/**
+ * What the chat Japanese calls need besides the collector: `env`, a state dir (a fresh one unless given), files and
+ * ids.
+ */
+const serverLayer = (env: Record<string, string>, stateDir?: string) =>
+  Layer.mergeAll(
+    ServerConfig.layerTest(process.cwd(), stateDir ?? { prefix: "t3-annotation-test-" }),
+    SecureRandom.layerWebCrypto,
+  ).pipe(
+    Layer.provideMerge(NodeServices.layer),
+    Layer.orDie,
+    Layer.merge(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+  );
 const peek = {
   kind: "peek",
   word: "CSP",
@@ -260,7 +281,7 @@ const adjustWith = (
   });
   const run = adjustAnnotationIntensity(input).pipe(
     Effect.provideService(HttpClient.HttpClient, client),
-    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+    Effect.provide(serverLayer(env)),
   );
   return { requests, run };
 };
@@ -335,10 +356,11 @@ describe("adjustAnnotationIntensity", () => {
     }),
   );
 
-  it.effect("fails as unreachable when the collector cannot be reached", () =>
+  it.effect("makes the press here, from normal, when the collector cannot be reached", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(1_800_000_000_000);
       const { run } = adjustWith(configured, null);
-      assert.strictEqual((yield* Effect.flip(run)).message, "collector unreachable");
+      assert.deepStrictEqual(yield* run, { level: -1, until: 1_800_010_800_000 });
     }),
   );
 });
@@ -492,8 +514,8 @@ describe("nextAnnotationReview", () => {
 });
 
 /** Runs `effect` against a fake collector that answers with `answer`, or fails to connect when `null`. */
-const collectorWith = <A, E>(
-  effect: Effect.Effect<A, E, HttpClient.HttpClient>,
+const collectorWith = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
   env: Record<string, string>,
   answer: { readonly status: number; readonly body: unknown } | null,
 ) => {
@@ -520,7 +542,7 @@ const collectorWith = <A, E>(
   });
   const run = effect.pipe(
     Effect.provideService(HttpClient.HttpClient, client),
-    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+    Effect.provide(serverLayer(env)),
   );
   return { requests, run };
 };
@@ -627,7 +649,7 @@ describe("setAnnotationEnglish", () => {
   );
 
   it.effect(
-    "fails as not configured, with the collector's error, its status, or as unreachable",
+    "fails as not configured, with the collector's error or its status, and is made here out of reach",
     () =>
       Effect.gen(function* () {
         const off = setAnnotationEnglish({ on: false, contexts: [] });
@@ -641,8 +663,198 @@ describe("setAnnotationEnglish", () => {
         assert.strictEqual((yield* Effect.flip(refused.run)).message, "chat surface is paused");
         const empty = collectorWith(off, configured, { status: 200, body: { ok: true } });
         assert.strictEqual((yield* Effect.flip(empty.run)).message, "collector answered 200");
+        // Out of reach, the press is made here instead.
+        yield* TestClock.setTime(1_800_000_000_000);
         const down = collectorWith(off, configured, null);
-        assert.strictEqual((yield* Effect.flip(down.run)).message, "collector unreachable");
+        assert.deepStrictEqual(yield* down.run, { on: false, until: 0, at: 1_800_000_000_000 });
       }),
+  );
+});
+
+/**
+ * A fake collector that answers each path with `answers[path]` (and takes every op sent to `/v1/ops`) while `up`, and
+ * can't be reached otherwise. The calls share one state dir, as one server's do.
+ */
+const collectorThatGoesDown = (answers: Record<string, unknown>, stateDir: string) => {
+  const collector = { up: true };
+  const requests: Array<{ readonly method: string; readonly path: string; readonly body: string }> =
+    [];
+  const client = HttpClient.make((request) => {
+    const body =
+      request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
+    const path = new URL(request.url).pathname;
+    requests.push({ method: request.method, path, body });
+    if (!collector.up) {
+      return Effect.fail(
+        new HttpClientError.HttpClientError({
+          reason: new HttpClientError.TransportError({ request }),
+        }),
+      );
+    }
+    const answer =
+      path === "/v1/ops"
+        ? {
+            ok: true,
+            results: (JSON.parse(body) as { ops: unknown[] }).ops.map(() => ({ ok: true })),
+            rev: "r2",
+          }
+        : answers[path];
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(request, new Response(JSON.stringify(answer), { status: 200 })),
+    );
+  });
+  const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.provideService(HttpClient.HttpClient, client),
+      Effect.provide(serverLayer(configured, stateDir)),
+    );
+  return { collector, requests, run };
+};
+
+it.layer(NodeServices.layer)("while the collector is out of reach", (it) => {
+  const T0 = 1_800_000_000_000;
+  const HOUR = 3_600_000;
+  const status = {
+    ok: true,
+    intensity: { level: 1, until: T0 + HOUR, at: T0 - HOUR },
+    english: { on: false, until: 0, at: 0 },
+    sentences: { level: -1, until: T0 + HOUR, at: T0 - HOUR },
+  };
+
+  it.effect(
+    "presses are made here from the status last read, and reach the collector, in order, with the next read",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+        const { collector, requests, run } = collectorThatGoesDown(
+          { "/v1/intensity": status },
+          stateDir,
+        );
+        yield* TestClock.setTime(T0);
+        yield* run(getAnnotationStatus());
+
+        collector.up = false;
+        assert.deepStrictEqual(yield* run(adjustAnnotationIntensity({ step: 1 })), {
+          level: 2,
+          until: T0 + 3 * HOUR,
+        });
+        yield* TestClock.setTime(T0 + 60_000);
+        const contexts = [{ view: "v1", context: "m1" }];
+        assert.deepStrictEqual(yield* run(setAnnotationEnglish({ on: true, contexts })), {
+          on: true,
+          until: T0 + 60_000 + HOUR,
+          at: T0 + 60_000,
+        });
+        // Back, but presses still wait: a new one is kept after them, so they reach it in the order made. Only the
+        // first press tried the collector; once one waits, the rest are made here at once.
+        collector.up = true;
+        yield* TestClock.setTime(T0 + 120_000);
+        assert.deepStrictEqual(
+          yield* run(adjustAnnotationIntensity({ step: -1, surface: "sentences" })),
+          { level: -2, until: T0 + 120_000 + 3 * HOUR },
+        );
+        assert.deepStrictEqual(
+          requests.slice(1).map((request) => request.path),
+          ["/v1/intensity"],
+        );
+
+        // A read out of reach answers with what is kept here, and the word level runs out as the collector's would.
+        collector.up = false;
+        yield* TestClock.setTime(T0 + 3 * HOUR);
+        assert.deepStrictEqual(yield* run(getAnnotationStatus()), {
+          intensity: { level: 0, until: 0 },
+          english: { on: false, until: 0, at: T0 + 60_000 },
+          sentences: { level: -2, until: T0 + 120_000 + 3 * HOUR },
+        });
+
+        // The next read that reaches it sends the presses as the collector's own ops, then reads its status.
+        collector.up = true;
+        requests.length = 0;
+        assert.deepStrictEqual(yield* run(getAnnotationStatus()), {
+          intensity: { level: 1, until: T0 + HOUR },
+          english: { on: false, until: 0, at: 0 },
+          sentences: { level: -1, until: T0 + HOUR },
+        });
+        assert.deepStrictEqual(
+          requests.map((request) => `${request.method} ${request.path}`),
+          ["POST /v1/ops", "GET /v1/intensity"],
+        );
+        const sent = JSON.parse(requests[0]!.body) as {
+          machine: string;
+          ops: Array<Record<string, unknown>>;
+        };
+        const stamp = (at: number) => ({
+          uid: sent.ops.find((op) => op.at === at)?.uid,
+          day: sent.ops.find((op) => op.at === at)?.day,
+          at,
+          machine: sent.machine,
+        });
+        assert.deepStrictEqual(sent.ops, [
+          {
+            ...stamp(T0),
+            kind: "set",
+            prefs: { intensity_chat: { level: 2, until: T0 + 3 * HOUR, at: T0, source: "t3" } },
+          },
+          {
+            ...stamp(T0 + 60_000),
+            kind: "english",
+            on: true,
+            until: T0 + 60_000 + HOUR,
+            source: "t3",
+            contexts,
+          },
+          {
+            ...stamp(T0 + 120_000),
+            kind: "set",
+            prefs: {
+              intensity_sentences: {
+                level: -2,
+                until: T0 + 120_000 + 3 * HOUR,
+                at: T0 + 120_000,
+                source: "t3",
+              },
+            },
+          },
+        ]);
+        assert.strictEqual(new Set(sent.ops.map((op) => op.uid)).size, 3);
+        assert.match(String(sent.ops[0]!.day), /^\d{4}-\d{2}-\d{2}$/);
+
+        // Nothing waits any more, so the next press goes to the collector again.
+        requests.length = 0;
+        yield* run(adjustAnnotationIntensity({ step: 1 }));
+        assert.deepStrictEqual(
+          requests.map((request) => `${request.method} ${request.path}`),
+          ["POST /v1/intensity"],
+        );
+      }),
+  );
+
+  it.effect("presses kept here wait while the collector stays out of reach", () =>
+    Effect.gen(function* () {
+      const stateDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+      const { collector, requests, run } = collectorThatGoesDown(
+        { "/v1/intensity": status },
+        stateDir,
+      );
+      yield* TestClock.setTime(T0);
+      collector.up = false;
+      // A press steps past an end and stays there, as the collector's does.
+      for (let press = 0; press < 5; press += 1) yield* run(adjustAnnotationIntensity({ step: 1 }));
+      assert.deepStrictEqual(yield* run(getAnnotationStatus()), {
+        intensity: { level: 3, until: T0 + 3 * HOUR },
+        english: { on: false, until: 0, at: 0 },
+      });
+      yield* run(getAnnotationStatus());
+      collector.up = true;
+      requests.length = 0;
+      yield* run(getAnnotationStatus());
+      const sent = JSON.parse(requests[0]!.body) as { ops: Array<{ prefs: unknown }> };
+      assert.deepStrictEqual(
+        sent.ops.map((op) => op.prefs),
+        [1, 2, 3, 3, 3].map((level) => ({
+          intensity_chat: { level, until: T0 + 3 * HOUR, at: T0, source: "t3" },
+        })),
+      );
+    }),
   );
 });
