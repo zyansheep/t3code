@@ -29,7 +29,7 @@ function html(source: string, level: number | "english") {
     render = renderer([...CHAT_MARKDOWN_REHYPE_PLUGINS, [rehypeChatLevel, options]]);
     renderers.set(key, render);
   }
-  return renderToStaticMarkup(render(source, false));
+  return renderToStaticMarkup(render(source));
 }
 
 const textAt = (source: string, level: number | "english") =>
@@ -98,7 +98,7 @@ describe("rehypeChatLevel", () => {
   it("leaves code as written", () => {
     const source = `Run \`${WORD}\` now.\n\n\`\`\`html\n${TWINS}\n\`\`\``;
     for (const level of [-3, 3, "english"] as const) {
-      expect(html(source, level)).toBe(renderToStaticMarkup(asWritten(source, false)));
+      expect(html(source, level)).toBe(renderToStaticMarkup(asWritten(source)));
     }
   });
 
@@ -106,7 +106,7 @@ describe("rehypeChatLevel", () => {
     const source =
       'The <abbr title="もんだい · problem">問題</abbr> is small. <span data-jw="ja">今日</span>, a <abbr title="Content Security Policy">CSP</abbr>.';
     for (const level of LEVELS) {
-      expect(html(source, level)).toBe(renderToStaticMarkup(asWritten(source, false)));
+      expect(html(source, level)).toBe(renderToStaticMarkup(asWritten(source)));
     }
   });
 
@@ -129,7 +129,7 @@ describe("rehypeChatLevel", () => {
   it("renders an element whose threshold is outside the contract as written", () => {
     for (const on of ["-3", "4", "+1", "01", "1.5", "x"]) {
       const source = `The <abbr title="もんだい · problem" data-en="problem" data-on="${on}">問題</abbr>.`;
-      expect(html(source, -3)).toBe(renderToStaticMarkup(asWritten(source, false)));
+      expect(html(source, -3)).toBe(renderToStaticMarkup(asWritten(source)));
       // Past the sanitizer too.
       const abbr = {
         type: "element",
