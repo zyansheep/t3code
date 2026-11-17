@@ -195,7 +195,9 @@ jobs:
     name: Build the AppImage and the t3 CLI
     needs: prepare
     if: needs.prepare.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    # Upstream's packager refuses native modules needing a glibc newer than
+    # Ubuntu 24.04's (scripts/linux-glibc.ts), so it builds where upstream does.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       BASE: ${{ needs.prepare.outputs.base }}
