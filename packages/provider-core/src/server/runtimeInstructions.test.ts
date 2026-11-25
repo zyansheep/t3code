@@ -2,8 +2,10 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   AGENT_FEEDBACK_INSTRUCTIONS,
+  buildDiskSpaceNote,
   buildRuntimeInstructions,
   PULL_REQUEST_LINKING_INSTRUCTIONS,
+  readFreeDiskSpace,
 } from "./runtimeInstructions.ts";
 
 describe("buildRuntimeInstructions", () => {
@@ -153,5 +155,34 @@ describe("buildRuntimeInstructions", () => {
     assert.isAbove(shown, 0);
     assert.include(block, `\n- Not listed: ${128 - shown} more\n</workspace_folders>`);
     assert.isBelow(new TextEncoder().encode(block).length, 4000);
+  });
+});
+
+describe("buildDiskSpaceNote", () => {
+  it("gives free space per filesystem, and says when it is low", () => {
+    const note = buildDiskSpaceNote([
+      { path: "/tmp", freeBytes: 21.4e9 },
+      { path: "/home/me", freeBytes: 8.25e9 },
+    ]);
+
+    assert.include(note, "Free disk space now: 21 GB on /tmp, 8.3 GB on /home/me. That is low.");
+    assert.include(note, "delete when done");
+    assert.notInclude(buildDiskSpaceNote([{ path: "/tmp", freeBytes: 200e9 }]), "That is low.");
+  });
+
+  it("says nothing when the space can't be read", () => {
+    assert.equal(buildDiskSpaceNote([]), "");
+    assert.deepStrictEqual(readFreeDiskSpace(["/no/such/path/for/t3"]), []);
+  });
+
+  it("names a filesystem once when the temp dir and home share it", () => {
+    const space = readFreeDiskSpace(["/", "/"]);
+
+    assert.equal(space.length, 1);
+    assert.isAbove(space[0]!.freeBytes, 0);
+  });
+
+  it("stays out of the runtime note, whose text must not change from turn to turn", () => {
+    assert.notInclude(buildRuntimeInstructions({ harness: "Codex" }), "disk_space");
   });
 });
