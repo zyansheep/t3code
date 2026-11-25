@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Effect's FileSystem has no statfs, and the free-space note is read synchronously where a session's prompt is built.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+
 import type { AgentFeedbackMode } from "@t3tools/contracts";
 
 import type { ProviderAdapterV2RuntimePolicy } from "./ProviderAdapter.ts";
@@ -104,4 +108,53 @@ export function buildWorkspaceInstructions(
   return [...head, ...shown, ...(hidden > 0 ? [`- Not listed: ${hidden} more`] : []), ...tail].join(
     "\n",
   );
+}
+
+export interface FreeDiskSpace {
+  readonly path: string;
+  readonly freeBytes: number;
+}
+
+/** Free space where agents write scratch files (the temp dir and home), one entry per filesystem. */
+export function readFreeDiskSpace(
+  paths: ReadonlyArray<string> = [NodeOS.tmpdir(), NodeOS.homedir()],
+): ReadonlyArray<FreeDiskSpace> {
+  const seen = new Set<number>();
+  const out: Array<FreeDiskSpace> = [];
+  for (const path of paths) {
+    try {
+      const dev = NodeFS.statSync(path).dev;
+      if (seen.has(dev)) continue;
+      seen.add(dev);
+      const fs = NodeFS.statfsSync(path);
+      out.push({ path, freeBytes: fs.bavail * fs.bsize });
+    } catch {
+      // A path that can't be read is left out; no note at all is better than a wrong one.
+    }
+  }
+  return out;
+}
+
+/**
+ * Free disk space for the session's opening context, so an agent knows how much room its downloads, builds and
+ * scratch files have. Read once per session (Claude) or per turn (Codex), never mid-turn. Empty when unreadable.
+ */
+export function buildDiskSpaceNote(
+  space: ReadonlyArray<FreeDiskSpace> = readFreeDiskSpace(),
+): string {
+  if (space.length === 0) return "";
+  const where = space
+    .map(({ path, freeBytes }) => `${formatGigabytes(freeBytes)} on ${path}`)
+    .join(", ");
+  const low = space.some(({ freeBytes }) => freeBytes < LOW_DISK_SPACE_BYTES);
+  return `<disk_space>Free disk space now: ${where}.${
+    low ? " That is low." : ""
+  } Other agents share it: keep big downloads, builds and copies to what the task needs, and keep scratch files in one folder of your own that you delete when done.</disk_space>`;
+}
+
+const LOW_DISK_SPACE_BYTES = 30e9;
+
+function formatGigabytes(bytes: number): string {
+  const gb = bytes / 1e9;
+  return `${gb >= 10 ? Math.round(gb) : gb.toFixed(1)} GB`;
 }
