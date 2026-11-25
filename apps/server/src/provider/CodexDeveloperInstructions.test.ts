@@ -82,3 +82,23 @@ describe("Codex device context", () => {
 function runtimeInstructions(runtime: Parameters<typeof buildCodexAdditionalContext>[0]) {
   return buildCodexAdditionalContext(runtime).t3_code_runtime!.value;
 }
+
+describe("Codex disk space context", () => {
+  it("carries free space in an entry of its own, apart from the runtime note", () => {
+    const context = buildCodexAdditionalContext({ model: "gpt-6.1-sol" }, true, [
+      { path: "/tmp", freeBytes: 12e9 },
+    ]);
+
+    NodeAssert.match(
+      context.t3_code_disk_space!.value,
+      /Free disk space now: 12 GB on \/tmp\. That is low\./,
+    );
+    NodeAssert.doesNotMatch(context.t3_code_runtime!.value, /disk_space/);
+  });
+
+  it("leaves the entry out when the space can't be read", () => {
+    const context = buildCodexAdditionalContext({ model: "gpt-6.1-sol" }, true, []);
+
+    NodeAssert.equal(context.t3_code_disk_space, undefined);
+  });
+});

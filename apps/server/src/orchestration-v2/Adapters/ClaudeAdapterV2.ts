@@ -217,7 +217,11 @@ import {
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
-import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import {
+  buildDiskSpaceNote,
+  buildRuntimeInstructions,
+  type FreeDiskSpace,
+} from "@t3tools/provider-core/server/runtimeInstructions";
 import {
   mcpToolPresentation,
   normalizeMcpText,
@@ -2170,6 +2174,8 @@ const subagentDeviceInstructions: HookCallback = () =>
 
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
+  /** Free space for the session's note; read from the disk when left out. */
+  readonly freeDiskSpace?: ReadonlyArray<FreeDiskSpace>;
   readonly modelCatalog?: ClaudeModelCatalog;
   readonly nativeThreadId: string;
   readonly title?: string;
@@ -2335,6 +2341,7 @@ export function makeClaudeQueryOptions(input: {
       preset: "claude_code" as const,
       append: [
         buildRuntimeInstructions({ harness: "Claude Code" }) +
+          diskSpaceNote(buildDiskSpaceNote(input.freeDiskSpace)) +
           (input.mcpServers === undefined
             ? ""
             : T3_CODE_ORCHESTRATION_INSTRUCTIONS +
@@ -14635,3 +14642,8 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       ),
     ),
 );
+
+/** The free-space note, set off from the runtime note when there is one. */
+function diskSpaceNote(note: string): string {
+  return note ? `\n\n${note}` : "";
+}

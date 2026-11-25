@@ -88,8 +88,15 @@ const toolHandlerServices = Layer.mergeAll(
 
 const utf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
 
+// Fixed, so the free-space note measures the same on every machine: a temp dir and a home on two filesystems.
+const freeDiskSpace = [
+  { path: "/tmp", freeBytes: 21e9 },
+  { path: "/home/user", freeBytes: 120e9 },
+];
+
 const claudeSystemAppend = () => {
   const { systemPrompt } = makeClaudeQueryOptions({
+    freeDiskSpace,
     modelSelection: {
       instanceId: ProviderInstanceId.make(CLAUDE_PROVIDER),
       model: "claude-opus-5-5",
@@ -107,6 +114,7 @@ const codexAdditionalContext = () =>
     buildCodexAdditionalContext(
       { model: "gpt-6.1-sol", modelName: "GPT-6.1 Sol", reasoningEffort: "high" },
       { browser: true, device: true },
+      freeDiskSpace,
     ),
   )
     .map((entry) => entry.value)
