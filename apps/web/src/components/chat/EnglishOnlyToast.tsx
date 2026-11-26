@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-untranslated-copy -- The fork's own copy is English only, outside the GT catalogs. */
 import type { EnvironmentId } from "@t3tools/contracts";
 import { LanguagesIcon } from "lucide-react";
 

@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-untranslated-copy -- The fork's own copy is English only, outside the GT catalogs. */
 import { useAtomValue } from "@effect/atom-react";
 import {
   ANNOTATION_REVIEW_NEW_PER_DAY_MAX,

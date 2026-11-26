@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-untranslated-copy -- The fork's own copy is English only, outside the GT catalogs. */
 /**
  * The review screen without the view, as Anki runs it. Each card left sends one review item, graded or (left ungraded)
  * still due. The next card is asked for while this one is shown, but only once the server has every grade so far, so a

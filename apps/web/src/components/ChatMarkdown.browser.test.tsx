@@ -135,21 +135,25 @@ const { englishSet, collector } = vi.hoisted(() => ({
   })),
   collector: { level: 0 },
 }));
-vi.mock(import("../state/annotationInteractions"), async (original) => ({
-  ...(await original()),
-  setAnnotationEnglish: {
-    label: "test:english",
-    run: async (_registry: unknown, request: { input: { on: boolean } }) =>
-      AsyncResult.success(englishSet(request)),
-  } as never,
-  adjustAnnotationIntensity: {
-    label: "test:step",
-    run: async (_registry: unknown, request: { input: { step: 1 | -1 } }) => {
-      collector.level += request.input.step;
-      return AsyncResult.success({ level: collector.level, until: 0 });
-    },
-  } as never,
-}));
+vi.mock(import("../state/annotationInteractions"), async (original) => {
+  const Effect = await import("effect/Effect");
+  return {
+    ...(await original()),
+    setAnnotationEnglish: {
+      label: "test:english",
+      run: (_registry: unknown, request: { input: { on: boolean } }) =>
+        Effect.sync(() => englishSet(request)),
+    } as never,
+    adjustAnnotationIntensity: {
+      label: "test:step",
+      run: (_registry: unknown, request: { input: { step: 1 | -1 } }) =>
+        Effect.sync(() => {
+          collector.level += request.input.step;
+          return { level: collector.level, until: 0 };
+        }),
+    } as never,
+  };
+});
 vi.mock(import("../state/annotationStatus"), async (original) => ({
   ...(await original()),
   watchAnnotationStatus: () => {},

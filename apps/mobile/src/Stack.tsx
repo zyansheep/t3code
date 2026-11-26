@@ -847,6 +847,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     // The environment is the one whose server has the collector, so the route is opened from the app, not a link.
     WordReview: createNativeStackScreen({
       screen: WordReviewScreen,
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- the fork's own copy is English only
       options: pageRoute({ title: "Review" }),
     }),
     SettingsLegal: createNativeStackScreen({

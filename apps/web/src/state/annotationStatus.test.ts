@@ -1,5 +1,4 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
 const NOW = Date.UTC(2026, 10, 5, 12, 0);
@@ -9,29 +8,31 @@ const HOUR = 3_600_000;
 const reads = vi.hoisted(() => [] as Array<(status: unknown) => void>);
 
 // The collector: English only for an hour, and a level for three.
-vi.mock(import("./annotationInteractions"), async (original) => ({
-  ...(await original()),
-  getAnnotationStatus: {
-    label: "test:status",
-    run: () =>
-      new Promise((resolve) => reads.push((status) => resolve(AsyncResult.success(status)))),
-  } as never,
-  setAnnotationEnglish: {
-    label: "test:english",
-    run: async (_registry: unknown, request: { input: { on: boolean } }) =>
-      AsyncResult.success({ on: request.input.on, until: NOW + HOUR, at: NOW }),
-  } as never,
-  // The words go to much heavier for three hours, the sentences to lighter for two.
-  adjustAnnotationIntensity: {
-    label: "test:step",
-    run: async (_registry: unknown, request: { input: { surface?: string } }) =>
-      AsyncResult.success(
-        request.input.surface === "sentences"
-          ? { level: -1, until: NOW + 2 * HOUR }
-          : { level: 2, until: NOW + 3 * HOUR },
-      ),
-  } as never,
-}));
+vi.mock(import("./annotationInteractions"), async (original) => {
+  const Effect = await import("effect/Effect");
+  return {
+    ...(await original()),
+    getAnnotationStatus: {
+      label: "test:status",
+      run: () => Effect.promise(() => new Promise((resolve) => reads.push(resolve))),
+    } as never,
+    setAnnotationEnglish: {
+      label: "test:english",
+      run: (_registry: unknown, request: { input: { on: boolean } }) =>
+        Effect.succeed({ on: request.input.on, until: NOW + HOUR, at: NOW }),
+    } as never,
+    // The words go to much heavier for three hours, the sentences to lighter for two.
+    adjustAnnotationIntensity: {
+      label: "test:step",
+      run: (_registry: unknown, request: { input: { surface?: string } }) =>
+        Effect.succeed(
+          request.input.surface === "sentences"
+            ? { level: -1, until: NOW + 2 * HOUR }
+            : { level: 2, until: NOW + 3 * HOUR },
+        ),
+    } as never,
+  };
+});
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import {

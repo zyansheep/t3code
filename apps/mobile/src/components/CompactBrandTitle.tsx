@@ -40,6 +40,7 @@ export function CompactBrandTitle(
         props.fit && showStage ? (event) => setFullWidth(event.nativeEvent.layout.width) : undefined
       }
       aria-level={1}
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- the fork's own copy is English only
       accessibilityLabel={props.accessibilityLabel ?? "Z3 Code, Threads"}
       accessible
       role="heading"

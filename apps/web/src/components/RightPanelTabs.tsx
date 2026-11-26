@@ -628,6 +628,7 @@ function surfaceTitle(
         resolve(msg("Thread on {label}", { label: surface.label })),
       );
     case "review":
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- the fork's own copy is English only
       return "Review";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;

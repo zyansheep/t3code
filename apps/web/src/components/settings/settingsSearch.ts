@@ -410,6 +410,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "cost-estimates",
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- the fork's own copy is English only
     title: "Cost estimates",
     to: "/settings/appearance",
     searchTerms: ["price dollars usd spend api tokens per turn thread sidebar billing"],

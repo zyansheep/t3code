@@ -8,7 +8,7 @@ import { render } from "../../../test/render";
 import "../../index.css";
 
 type Request<I> = { readonly environmentId: string; readonly input: I };
-type Answer = AsyncResult.AsyncResult<unknown, unknown>;
+type Answer = AsyncResult.AsyncResult<unknown, AnnotationIntensityError>;
 
 // The collector, through the client's own server: each command answers from its mock.
 const collector = vi.hoisted(() => ({
@@ -17,8 +17,21 @@ const collector = vi.hoisted(() => ({
   step: vi.fn<(request: Request<{ step: 1 | -1; surface?: "chat" | "sentences" }>) => Answer>(),
 }));
 vi.mock(import("../../state/annotationInteractions"), async (original) => {
+  const Effect = await import("effect/Effect");
+  // Commands run as Effects: a mock's AsyncResult becomes the command's success or failure.
   const command = <I,>(label: string, answer: (request: Request<I>) => Answer) =>
-    ({ label, run: async (_registry: unknown, request: Request<I>) => answer(request) }) as never;
+    ({
+      label,
+      run: (_registry: unknown, request: Request<I>) =>
+        Effect.suspend(() => {
+          const result = answer(request);
+          return result._tag === "Success"
+            ? Effect.succeed(result.value)
+            : result._tag === "Failure"
+              ? Effect.failCause(result.cause)
+              : Effect.never;
+        }),
+    }) as never;
   return {
     ...(await original()),
     getAnnotationStatus: command<object>("test:status", (request) => collector.status(request)),

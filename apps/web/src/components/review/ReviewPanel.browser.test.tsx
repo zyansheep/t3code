@@ -1,5 +1,4 @@
 import { AnnotationReportError, EnvironmentId } from "@t3tools/contracts";
-import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -21,19 +20,20 @@ const collector = vi.hoisted(() => ({
 }));
 vi.mock(import("../../state/annotationInteractions"), async (original) => {
   const { AnnotationReportError: ReportError } = await import("@t3tools/contracts");
-  const { fail } = await import("effect/Cause");
+  const Effect = await import("effect/Effect");
   const { is } = await import("effect/Schema");
   const isReportError = is(ReportError);
   // An answer that is an AnnotationReportError, or another Error, fails the command with it.
   const command = <I,>(label: string, answer: (request: Request<I>) => unknown) =>
     ({
       label,
-      run: async (_registry: unknown, request: Request<I>) => {
-        const value = answer(request);
-        return isReportError(value) || value instanceof Error
-          ? AsyncResult.failure(fail(value))
-          : AsyncResult.success(value);
-      },
+      run: (_registry: unknown, request: Request<I>) =>
+        Effect.suspend(() => {
+          const value = answer(request);
+          return isReportError(value) || value instanceof Error
+            ? Effect.fail(value)
+            : Effect.succeed(value);
+        }),
     }) as never;
   return {
     ...(await original()),
