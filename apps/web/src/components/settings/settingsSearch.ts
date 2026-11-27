@@ -409,6 +409,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("latex tex katex equations formulas markdown")],
   },
   {
+    id: "cost-estimates",
+    // oxlint-disable-next-line t3code/no-untranslated-copy -- the fork's own copy is English only
+    title: "Cost estimates",
+    to: "/settings/appearance",
+    searchTerms: ["price dollars usd spend api tokens per turn thread sidebar billing"],
+  },
+  {
     id: "panel-animations",
     title: msg("Panel animations"),
     to: "/settings/appearance",

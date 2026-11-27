@@ -5711,6 +5711,8 @@ interface ActiveClaudeTurnContext {
   heldResult: SDKResultMessage | undefined;
   // Claude can run another model than requested, such as when an organization disallows it.
   executedModel: string | undefined;
+  // The process and its running total_cost_usd when this turn started; a result's total less this is the turn's cost.
+  readonly costAnchor: { readonly query: ClaudeLiveQueryContext; readonly totalUsd: number };
 }
 
 interface ActiveClaudeProviderRetry {
@@ -5775,12 +5777,27 @@ interface ClaudeLiveQueryContext {
   handedOffSubagents: ReadonlySet<ActiveClaudeSubagent>;
   // The SDK's per-process model ledger at the last result; a new process starts at zero.
   modelLedger: ClaudeModelLedger | undefined;
+  // total_cost_usd at the last result. The CLI sums it per process, so a new process starts at zero.
+  totalCostUsd: number;
   // Per process, not per session: a relative temp dir follows the cwd this CLI
   // was launched in, and a later turn's cwd can differ.
   readonly taskOutputRoot: string | undefined;
   // Root messages this process streamed; what it holds beyond the history it resumed.
   readonly emittedMessageUuids: Set<string>;
   transcriptPath: string | undefined;
+}
+
+/**
+ * The turn's cost from the CLI's running total_cost_usd, which covers subagents and compaction.
+ * A result from a later process counts from that process's zero.
+ */
+export function claudeTurnCost(
+  anchor: { readonly query: unknown; readonly totalUsd: number },
+  result: { readonly query: unknown; readonly totalUsd: number } | undefined,
+): { readonly costUsd?: number } {
+  if (result === undefined) return {};
+  const base = result.query === anchor.query ? anchor.totalUsd : 0;
+  return result.totalUsd >= base ? { costUsd: result.totalUsd - base } : {};
 }
 
 interface ActiveClaudeToolCall {
@@ -6502,6 +6519,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
         // Wake buffers replay result frames, so ledger growth is measured once on arrival.
         const resultLedgerUsage = new WeakMap<SDKMessage, ClaudeLedgerUsage>();
+        // Each result's process and running total_cost_usd, read once on arrival like the ledger.
+        const resultCumulativeCost = new WeakMap<
+          SDKMessage,
+          { readonly query: ClaudeLiveQueryContext; readonly totalUsd: number }
+        >();
         const resultsReportingNewContextWindow = new WeakSet<SDKMessage>();
         // A worktree handoff changes the project settings even within one session.
         let bypassCache: { cwd: string | null; availability: ClaudeBypassAvailability } | null =
@@ -10517,6 +10539,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                           }),
                     },
                   ),
+                  ...claudeTurnCost(
+                    input.context.costAnchor,
+                    input.result === undefined ? undefined : resultCumulativeCost.get(input.result),
+                  ),
                 },
               }),
               // Emit the roster before root settlement so writeFinalRunEvents preserves it.
@@ -14364,6 +14390,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ),
             ),
             modelLedger: new Map(),
+            totalCostUsd: 0,
             taskOutputRoot: claudeTaskOutputRoot(
               adapterOptions.environment,
               path,
@@ -14440,6 +14467,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     context.permissionMode = message.permissionMode;
                   }
                   if (message.type === "result") {
+                    if (Number.isFinite(message.total_cost_usd)) {
+                      context.totalCostUsd = message.total_cost_usd;
+                      resultCumulativeCost.set(message, {
+                        query: context,
+                        totalUsd: message.total_cost_usd,
+                      });
+                    }
                     const ledger = claudeModelLedger(message.modelUsage);
                     const growth = claudeLedgerDelta(context.modelLedger, ledger);
                     if (growth !== undefined) resultLedgerUsage.set(message, growth);
@@ -14727,6 +14761,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               steerUuids: new Set(),
               heldResult: undefined,
               executedModel: undefined,
+              costAnchor: { query: querySession, totalUsd: querySession.totalCostUsd },
             };
             const attachTurn = Effect.gen(function* () {
               // Set before claiming: a query that exits after the claim finalizes this turn; one that exits before it fails the start.

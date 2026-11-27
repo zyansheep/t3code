@@ -43,4 +43,9 @@ export function assertClaudeIdleResumeOutput(
       [7, { inputTokens: 0, outputTokens: 0 }],
     ],
   );
+  // So does its running total_cost_usd: each turn costs its own process's total.
+  assert.deepEqual(
+    projection.providerTurns.map((turn) => turn.costUsd),
+    [0.0036516, 0.0036573],
+  );
 }

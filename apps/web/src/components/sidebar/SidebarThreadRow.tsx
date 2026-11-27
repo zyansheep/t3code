@@ -89,6 +89,8 @@ import {
   useEnvironmentScopeDenied,
 } from "../../state/session";
 import { formatRelativeTime, parseTimestampDate } from "../../timestampFormat";
+import { useClientSettings } from "../../hooks/useSettings";
+import { formatCostUsd } from "../../lib/formatCost";
 import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
@@ -186,6 +188,22 @@ function RelativeTimeLabel(props: { timestamp: string | null }) {
   return props.timestamp === null
     ? null
     : compactSidebarTimeLabel(props.timestamp, Date.parse(`${nowMinute}:00.000Z`), m);
+}
+
+// The thread's API-equivalent cost before its time or status, when cost estimates are on. It
+// keeps the slot's muted weight and colour inside a coloured status. A zero total, such as a
+// thread whose only turns failed, adds nothing to the row.
+function ThreadCostLabel(props: { costUsd: number | undefined }) {
+  const enabled = useClientSettings((settings) => settings.costEstimatesEnabled);
+  if (!enabled || props.costUsd === undefined || props.costUsd === 0) return null;
+  return (
+    <span className="font-normal text-secondary-label">
+      {formatCostUsd(props.costUsd)}
+      <span aria-hidden className="mx-1">
+        ·
+      </span>
+    </span>
+  );
 }
 
 export function JumpHintBadge(props: { label: string }) {
@@ -1461,11 +1479,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         topStatus.className,
                       )}
                     >
+                      <ThreadCostLabel costUsd={thread.source.costUsd} />
                       <TopStatusIcon icon={topStatus.icon} className="size-3" />
                       {topStatus.label}
                     </span>
                   ) : (
                     <span className="text-xs">
+                      <ThreadCostLabel costUsd={thread.source.costUsd} />
                       <RelativeTimeLabel
                         timestamp={
                           variantAction === "unsettle"
@@ -1661,6 +1681,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           topStatus.className,
                         )}
                       >
+                        <ThreadCostLabel costUsd={thread.source.costUsd} />
                         <TopStatusIcon icon={topStatus.icon} className="size-4" />
                         {/* Not a live region: a collapsed sidebar is inert, so
                             BackgroundThreadAnnouncer and the open thread's
@@ -1684,7 +1705,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       </span>
                     )
                   ) : (
-                    <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
+                    <>
+                      <ThreadCostLabel costUsd={thread.source.costUsd} />
+                      <RelativeTimeLabel timestamp={resolveThreadActivityTimestamp(thread)} />
+                    </>
                   )}
                 </span>
                 {props.settlementSupported || showSnoozeButton || hasUnsentDraft ? (

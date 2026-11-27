@@ -410,6 +410,34 @@ export function AppearanceSettingsPanel() {
             />
           }
         />
+        <SettingsRow
+          {...searchableSetting("cost-estimates")}
+          // oxlint-disable-next-line t3code/no-untranslated-copy -- the fork's own copy is English only
+          description="Show what each turn and thread would cost at API prices, beside its time in the sidebar and on its Worked for row. On a subscription this is not what you pay."
+          resetAction={
+            settings.costEstimatesEnabled !== DEFAULT_UNIFIED_SETTINGS.costEstimatesEnabled ? (
+              <SettingResetButton
+                // oxlint-disable-next-line t3code/no-untranslated-copy -- the fork's own copy is English only
+                ariaLabel="Reset cost estimates to default"
+                onClick={() =>
+                  updateSettings({
+                    costEstimatesEnabled: DEFAULT_UNIFIED_SETTINGS.costEstimatesEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.costEstimatesEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ costEstimatesEnabled: Boolean(checked) })
+              }
+              // oxlint-disable-next-line t3code/no-untranslated-copy -- the fork's own copy is English only
+              aria-label="Show cost estimates"
+            />
+          }
+        />
         <AdvancedSettings
           targetIds={[
             searchableSetting("panel-animations").id,
