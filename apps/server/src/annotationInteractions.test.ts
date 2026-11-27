@@ -1,0 +1,860 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, it } from "@effect/vitest";
+import {
+  type AnnotationIntensityAdjustInput,
+  AnnotationInteractionsReportInput,
+  type AnnotationReviewNextInput,
+} from "@t3tools/contracts";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
+import { describe } from "vite-plus/test";
+
+import * as ServerConfig from "./config.ts";
+
+import {
+  adjustAnnotationIntensity,
+  forwardAnnotationInteractions,
+  getAnnotationStatus,
+  nextAnnotationReview,
+  setAnnotationEnglish,
+} from "./annotationInteractions.ts";
+
+const COLLECTOR = "http://collector.test:7853/v1/interactions";
+
+/**
+ * What the chat Japanese calls need besides the collector: `env`, a state dir (a fresh one unless given), files and
+ * ids.
+ */
+const serverLayer = (env: Record<string, string>, stateDir?: string) =>
+  Layer.mergeAll(
+    ServerConfig.layerTest(process.cwd(), stateDir ?? { prefix: "t3-annotation-test-" }),
+    SecureRandom.layerWebCrypto,
+  ).pipe(
+    Layer.provideMerge(NodeServices.layer),
+    Layer.orDie,
+    Layer.merge(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+  );
+const peek = {
+  kind: "peek",
+  word: "CSP",
+  at: 1_800_000_000_000,
+  dwellMs: 900,
+  view: "v1",
+  context: "m1",
+  position: 0,
+  box: [0, 0, 400, 40],
+  annotations: [["CSP", 4, 0]],
+} as const;
+
+const decodeReport = Schema.decodeSync(AnnotationInteractionsReportInput);
+
+/** Runs the forwarder against a fake collector that answers every post with `status`. */
+const forwardWith = (
+  env: Record<string, string>,
+  status = 200,
+  input: AnnotationInteractionsReportInput = { items: [peek] },
+) => {
+  const requests: Array<{ readonly url: string; readonly body: string }> = [];
+  const client = HttpClient.make((request) => {
+    requests.push({
+      url: request.url,
+      body: request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
+    });
+    return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status })));
+  });
+  const run = forwardAnnotationInteractions(input).pipe(
+    Effect.provideService(HttpClient.HttpClient, client),
+    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+  );
+  return { requests, run };
+};
+
+describe("forwardAnnotationInteractions", () => {
+  it.effect("posts the interactions to the configured collector as the t3 surface", () =>
+    Effect.gen(function* () {
+      const { requests, run } = forwardWith({ T3CODE_ANNOTATION_EVENTS_URL: COLLECTOR });
+      yield* run;
+      assert.deepStrictEqual(
+        requests.map((request) => request.url),
+        [COLLECTOR],
+      );
+      assert.include(requests[0]!.body, '"surface":"t3"');
+      assert.include(requests[0]!.body, '"word":"CSP"');
+    }),
+  );
+
+  it.effect("forwards a phone's open whole, keeping its uid for the collector's dedupe", () =>
+    Effect.gen(function* () {
+      const opened = {
+        kind: "pin",
+        word: "mondai",
+        at: 1_800_000_000_000,
+        dwellMs: 0,
+        view: "phone-s1-abc",
+        context: "m1",
+        position: 0,
+        box: [0, 0, 0, 0],
+        annotations: [["mondai", 0, 0]],
+        level: -2,
+        sentenceLevel: 1,
+        uid: "phone-s1-1",
+      } as const;
+      const { requests, run } = forwardWith(
+        { T3CODE_ANNOTATION_EVENTS_URL: COLLECTOR },
+        200,
+        decodeReport({ items: [opened] }),
+      );
+      yield* run;
+      assert.deepStrictEqual(JSON.parse(requests[0]!.body), { surface: "t3", items: [opened] });
+    }),
+  );
+
+  it.effect("forwards a review card's timing and grade whole, like any other item", () =>
+    Effect.gen(function* () {
+      const left = {
+        kind: "review",
+        at: 1_800_000_000_000,
+        card: "c42",
+        word: "問題",
+        revealMs: null,
+        shownMs: 2_400,
+        source: "desktop",
+        uid: "review-1",
+      } as const;
+      const graded = {
+        ...left,
+        card: "c43",
+        revealMs: 1_200,
+        shownMs: 3_000,
+        grade: 3,
+        gradeMs: 3_000,
+        uid: "review-2",
+      } as const;
+      const { requests, run } = forwardWith(
+        { T3CODE_ANNOTATION_EVENTS_URL: COLLECTOR },
+        200,
+        decodeReport({ items: [left, graded] }),
+      );
+      yield* run;
+      assert.deepStrictEqual(JSON.parse(requests[0]!.body), {
+        surface: "t3",
+        items: [left, graded],
+      });
+    }),
+  );
+
+  it.effect(
+    "fails a batch with review items the collector does not store, saying if a resend can help",
+    () =>
+      Effect.gen(function* () {
+        const review = {
+          kind: "review",
+          at: 1_800_000_000_000,
+          card: "c42",
+          word: "問題",
+          revealMs: 1_200,
+          shownMs: 3_000,
+          grade: 3,
+          gradeMs: 3_000,
+          source: "desktop",
+          uid: "review-2",
+        } as const;
+        const graded = decodeReport({ items: [review] });
+        const failure = (answer: { readonly status: number; readonly body: unknown } | null) =>
+          Effect.flip(collectorWith(forwardAnnotationInteractions(graded), configured, answer).run);
+        const down = yield* failure(null);
+        assert.deepStrictEqual(
+          [down._tag, down.detail, down.retryable],
+          ["AnnotationReportError", "collector unreachable", true],
+        );
+        const broken = yield* failure({ status: 500, body: { ok: false } });
+        assert.deepStrictEqual([broken.detail, broken.retryable], ["collector answered 500", true]);
+        // Without reasons, every review item counts as rejected.
+        const rejected = yield* failure({
+          status: 200,
+          body: { ok: true, stored: 0, duplicates: 0, rejected: 1 },
+        });
+        assert.deepStrictEqual(
+          [rejected.detail, rejected.retryable, rejected.rejected],
+          ["collector rejected 1 of 1: rejected", false, [{ item: 0, error: "rejected" }]],
+        );
+
+        // With reasons, only the review items they name: the rest of the batch was stored.
+        const mixed = decodeReport({
+          items: [peek, review, { ...review, card: "c43", uid: "review-3" }],
+        });
+        const named = yield* Effect.flip(
+          collectorWith(forwardAnnotationInteractions(mixed), configured, {
+            status: 200,
+            body: {
+              ok: true,
+              stored: 1,
+              duplicates: 0,
+              rejected: 2,
+              reasons: [
+                { item: 0, error: "malformed" },
+                { item: 2, error: "shownMs over a day" },
+              ],
+            },
+          }).run,
+        );
+        assert.deepStrictEqual(
+          [named.detail, named.retryable, named.rejected],
+          [
+            "collector rejected 1 of 3: shownMs over a day",
+            false,
+            [{ item: 2, error: "shownMs over a day" }],
+          ],
+        );
+        // Ignored items, and a rejected reading report, are no failure.
+        yield* collectorWith(forwardAnnotationInteractions(mixed), configured, {
+          status: 200,
+          body: {
+            ok: true,
+            stored: 2,
+            duplicates: 0,
+            ignored: 1,
+            rejected: 1,
+            reasons: [{ item: 0, error: "malformed" }],
+          },
+        }).run;
+        // A resend the collector already has is a duplicate, which is stored.
+        const resent = collectorWith(forwardAnnotationInteractions(graded), configured, {
+          status: 200,
+          body: { ok: true, stored: 0, duplicates: 1, rejected: 0 },
+        });
+        yield* resent.run;
+        assert.strictEqual(resent.requests.length, 1);
+        // Reading reports stay best effort.
+        yield* collectorWith(forwardAnnotationInteractions({ items: [peek] }), configured, null)
+          .run;
+      }),
+  );
+
+  it.effect("sends nothing without a collector and never fails on a bad answer", () =>
+    Effect.gen(function* () {
+      const off = forwardWith({});
+      yield* off.run;
+      assert.strictEqual(off.requests.length, 0);
+      const failing = forwardWith({ T3CODE_ANNOTATION_EVENTS_URL: COLLECTOR }, 500);
+      yield* failing.run;
+      assert.strictEqual(failing.requests.length, 1);
+    }),
+  );
+});
+
+/** Runs one intensity press against a fake collector that answers with `answer`, or fails to connect when `null`. */
+const adjustWith = (
+  env: Record<string, string>,
+  answer: { readonly status: number; readonly body: unknown } | null,
+  input: AnnotationIntensityAdjustInput = { step: -1 },
+) => {
+  const requests: Array<{
+    readonly url: string;
+    readonly contentType: string;
+    readonly body: string;
+  }> = [];
+  const client = HttpClient.make((request) => {
+    requests.push({
+      url: request.url,
+      contentType: request.headers["content-type"] ?? "",
+      body: request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
+    });
+    return answer === null
+      ? Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request }),
+          }),
+        )
+      : Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(JSON.stringify(answer.body), { status: answer.status }),
+          ),
+        );
+  });
+  const run = adjustAnnotationIntensity(input).pipe(
+    Effect.provideService(HttpClient.HttpClient, client),
+    Effect.provide(serverLayer(env)),
+  );
+  return { requests, run };
+};
+
+const configured = { T3CODE_ANNOTATION_EVENTS_URL: COLLECTOR };
+
+describe("adjustAnnotationIntensity", () => {
+  it.effect("posts the step to the collector's intensity endpoint and returns its new level", () =>
+    Effect.gen(function* () {
+      const until = 1_800_000_600_000;
+      const { requests, run } = adjustWith(configured, {
+        status: 200,
+        body: { ok: true, intensity: { level: -2, until, at: 1_800_000_000_000 } },
+      });
+      assert.deepStrictEqual(yield* run, { level: -2, until });
+      assert.deepStrictEqual(requests, [
+        {
+          url: "http://collector.test:7853/v1/intensity",
+          contentType: "application/json",
+          body: JSON.stringify({ surface: "chat", step: -1, source: "t3" }),
+        },
+      ]);
+    }),
+  );
+
+  it.effect("steps the sentences when asked, and answers with their level", () =>
+    Effect.gen(function* () {
+      const until = 1_800_000_600_000;
+      const { requests, run } = adjustWith(
+        configured,
+        { status: 200, body: { ok: true, intensity: { level: 2, until, at: 1_800_000_000_000 } } },
+        { step: 1, surface: "sentences" },
+      );
+      assert.deepStrictEqual(yield* run, { level: 2, until });
+      assert.deepStrictEqual(
+        requests.map((request) => request.body),
+        [JSON.stringify({ surface: "sentences", step: 1, source: "t3" })],
+      );
+    }),
+  );
+
+  it.effect("accepts the ends of the scale, off (-3) and full (+3)", () =>
+    Effect.gen(function* () {
+      for (const level of [-3, 3]) {
+        const { run } = adjustWith(configured, {
+          status: 200,
+          body: { ok: true, intensity: { level, until: 1_800_000_600_000, at: 1_800_000_000_000 } },
+        });
+        assert.deepStrictEqual(yield* run, { level, until: 1_800_000_600_000 });
+      }
+    }),
+  );
+
+  it.effect("fails as not configured without a collector, sending nothing", () =>
+    Effect.gen(function* () {
+      const { requests, run } = adjustWith({}, { status: 200, body: { ok: true } });
+      const error = yield* Effect.flip(run);
+      assert.strictEqual(error.message, "not configured");
+      assert.strictEqual(requests.length, 0);
+    }),
+  );
+
+  it.effect("fails with the collector's error, or its status, when it refuses", () =>
+    Effect.gen(function* () {
+      const refused = adjustWith(configured, {
+        status: 400,
+        body: { ok: false, error: "chat surface is paused" },
+      });
+      assert.strictEqual((yield* Effect.flip(refused.run)).message, "chat surface is paused");
+      const broken = adjustWith(configured, { status: 502, body: "Bad Gateway" });
+      assert.strictEqual((yield* Effect.flip(broken.run)).message, "collector answered 502");
+    }),
+  );
+
+  it.effect("makes the press here, from normal, when the collector cannot be reached", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(1_800_000_000_000);
+      const { run } = adjustWith(configured, null);
+      assert.deepStrictEqual(yield* run, { level: -1, until: 1_800_010_800_000 });
+    }),
+  );
+});
+
+/** Asks a fake collector for the next review card; it answers with `answer`, or fails to connect when `null`. */
+const reviewWith = (
+  env: Record<string, string>,
+  answer: { readonly status: number; readonly body: unknown } | null,
+  input: AnnotationReviewNextInput = { source: "desktop", exclude: ["c1"] },
+) => {
+  const requests: Array<{ readonly url: string; readonly body: string }> = [];
+  const client = HttpClient.make((request) => {
+    requests.push({
+      url: request.url,
+      body: request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
+    });
+    return answer === null
+      ? Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request }),
+          }),
+        )
+      : Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(JSON.stringify(answer.body), { status: answer.status }),
+          ),
+        );
+  });
+  const run = nextAnnotationReview(input).pipe(
+    Effect.provideService(HttpClient.HttpClient, client),
+    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+  );
+  return { requests, run };
+};
+
+describe("nextAnnotationReview", () => {
+  it.effect("posts the source and excluded cards to the collector and returns its card", () =>
+    Effect.gen(function* () {
+      const card = { id: "c42", ja: "問題", kana: "もんだい", gloss: "problem" };
+      const { requests, run } = reviewWith(configured, { status: 200, body: { ok: true, card } });
+      assert.deepStrictEqual(yield* run, { card });
+      assert.deepStrictEqual(requests, [
+        {
+          url: "http://collector.test:7853/v1/review/next",
+          body: JSON.stringify({ source: "desktop", exclude: ["c1"] }),
+        },
+      ]);
+    }),
+  );
+
+  it.effect(
+    "passes Review more on, and returns the card's queue and intervals with the counts",
+    () =>
+      Effect.gen(function* () {
+        const card = {
+          id: "c42",
+          ja: "問題",
+          kana: "もんだい",
+          gloss: "problem",
+          queue: "learning",
+          intervals: { again: 60, hard: 360, good: 600, easy: 345_600 },
+        } as const;
+        const counts = { new: 12, learning: 3, review: 40 };
+        const { requests, run } = reviewWith(
+          configured,
+          { status: 200, body: { ok: true, card, counts } },
+          { source: "desktop", exclude: [], more: true },
+        );
+        assert.deepStrictEqual(yield* run, { card, counts });
+        assert.deepStrictEqual(JSON.parse(requests[0]!.body), {
+          source: "desktop",
+          exclude: [],
+          more: true,
+        });
+      }),
+  );
+
+  it.effect("returns no card when the collector has nothing to review", () =>
+    Effect.gen(function* () {
+      const { run } = reviewWith(configured, { status: 200, body: { ok: true, card: null } });
+      assert.deepStrictEqual(yield* run, { card: null });
+      const done = reviewWith(configured, {
+        status: 200,
+        body: { ok: true, card: null, counts: { new: 0, learning: 0, review: 0 } },
+      });
+      assert.deepStrictEqual(yield* done.run, {
+        card: null,
+        counts: { new: 0, learning: 0, review: 0 },
+      });
+    }),
+  );
+
+  it.effect("passes a counts-only peek and the cards to release on, for a badge", () =>
+    Effect.gen(function* () {
+      const counts = { new: 12, learning: 3, review: 40 };
+      const { requests, run } = reviewWith(
+        configured,
+        { status: 200, body: { ok: true, card: null, counts } },
+        { source: "desktop", exclude: [], peek: true, release: ["c7"] },
+      );
+      assert.deepStrictEqual(yield* run, { card: null, counts });
+      assert.deepStrictEqual(JSON.parse(requests[0]!.body), {
+        source: "desktop",
+        exclude: [],
+        peek: true,
+        release: ["c7"],
+      });
+    }),
+  );
+
+  it.effect("passes new cards a day on to be saved, and returns the limit in effect", () =>
+    Effect.gen(function* () {
+      const counts = { new: 25, learning: 0, review: 4 };
+      const { requests, run } = reviewWith(
+        configured,
+        { status: 200, body: { ok: true, card: null, counts, newPerDay: 25 } },
+        { source: "mobile", exclude: [], peek: true, newPerDay: 25 },
+      );
+      assert.deepStrictEqual(yield* run, { card: null, counts, newPerDay: 25 });
+      assert.deepStrictEqual(JSON.parse(requests[0]!.body), {
+        source: "mobile",
+        exclude: [],
+        peek: true,
+        newPerDay: 25,
+      });
+    }),
+  );
+
+  it.effect("fails as not configured without a collector, sending nothing", () =>
+    Effect.gen(function* () {
+      const { requests, run } = reviewWith({}, { status: 200, body: { ok: true, card: null } });
+      assert.strictEqual((yield* Effect.flip(run)).message, "not configured");
+      assert.strictEqual(requests.length, 0);
+    }),
+  );
+
+  it.effect("fails with the collector's error, its status, or as unreachable", () =>
+    Effect.gen(function* () {
+      const refused = reviewWith(configured, {
+        status: 400,
+        body: { ok: false, error: "no words yet" },
+      });
+      assert.strictEqual((yield* Effect.flip(refused.run)).message, "no words yet");
+      const broken = reviewWith(configured, { status: 502, body: "Bad Gateway" });
+      assert.strictEqual((yield* Effect.flip(broken.run)).message, "collector answered 502");
+      const down = reviewWith(configured, null);
+      assert.strictEqual((yield* Effect.flip(down.run)).message, "collector unreachable");
+    }),
+  );
+});
+
+/** Runs `effect` against a fake collector that answers with `answer`, or fails to connect when `null`. */
+const collectorWith = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  env: Record<string, string>,
+  answer: { readonly status: number; readonly body: unknown } | null,
+) => {
+  const requests: Array<{ readonly method: string; readonly url: string; readonly body: string }> =
+    [];
+  const client = HttpClient.make((request) => {
+    requests.push({
+      method: request.method,
+      url: request.url,
+      body: request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
+    });
+    return answer === null
+      ? Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request }),
+          }),
+        )
+      : Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(JSON.stringify(answer.body), { status: answer.status }),
+          ),
+        );
+  });
+  const run = effect.pipe(
+    Effect.provideService(HttpClient.HttpClient, client),
+    Effect.provide(serverLayer(env)),
+  );
+  return { requests, run };
+};
+
+describe("getAnnotationStatus", () => {
+  const intensity = { level: 1, until: 1_800_000_600_000, at: 1_800_000_000_000 };
+
+  it.effect("reads the chat level and English only from the collector's intensity endpoint", () =>
+    Effect.gen(function* () {
+      const english = { on: true, until: 1_800_003_600_000, at: 1_800_000_000_000 };
+      const { requests, run } = collectorWith(getAnnotationStatus(), configured, {
+        status: 200,
+        body: { ok: true, intensity, english },
+      });
+      assert.deepStrictEqual(yield* run, {
+        intensity: { level: 1, until: 1_800_000_600_000 },
+        english,
+      });
+      assert.deepStrictEqual(requests, [
+        { method: "GET", url: "http://collector.test:7853/v1/intensity?surface=chat", body: "" },
+      ]);
+    }),
+  );
+
+  it.effect(
+    "reads the sentence level beside the word level, and none from a collector with one",
+    () =>
+      Effect.gen(function* () {
+        const english = { on: false, until: 0, at: 0 };
+        const sentences = { level: -1, until: 1_800_000_900_000, at: 1_800_000_000_000 };
+        const two = collectorWith(getAnnotationStatus(), configured, {
+          status: 200,
+          body: { ok: true, intensity, english, sentences },
+        });
+        assert.deepStrictEqual(yield* two.run, {
+          intensity: { level: 1, until: 1_800_000_600_000 },
+          english,
+          sentences: { level: -1, until: 1_800_000_900_000 },
+        });
+        const one = collectorWith(getAnnotationStatus(), configured, {
+          status: 200,
+          body: { ok: true, intensity, english },
+        });
+        assert.notProperty(yield* one.run, "sentences");
+      }),
+  );
+
+  it.effect("reads English only as off from a collector that predates it", () =>
+    Effect.gen(function* () {
+      const { run } = collectorWith(getAnnotationStatus(), configured, {
+        status: 200,
+        body: { ok: true, intensity },
+      });
+      assert.deepStrictEqual((yield* run).english, { on: false, until: 0, at: 0 });
+    }),
+  );
+
+  it.effect(
+    "fails as not configured, with the collector's error, its status, or as unreachable",
+    () =>
+      Effect.gen(function* () {
+        const off = collectorWith(getAnnotationStatus(), {}, { status: 200, body: { ok: true } });
+        assert.strictEqual((yield* Effect.flip(off.run)).message, "not configured");
+        assert.strictEqual(off.requests.length, 0);
+        const refused = collectorWith(getAnnotationStatus(), configured, {
+          status: 400,
+          body: { ok: false, error: "unknown surface" },
+        });
+        assert.strictEqual((yield* Effect.flip(refused.run)).message, "unknown surface");
+        const broken = collectorWith(getAnnotationStatus(), configured, {
+          status: 502,
+          body: "Bad Gateway",
+        });
+        assert.strictEqual((yield* Effect.flip(broken.run)).message, "collector answered 502");
+        const down = collectorWith(getAnnotationStatus(), configured, null);
+        assert.strictEqual((yield* Effect.flip(down.run)).message, "collector unreachable");
+      }),
+  );
+});
+
+describe("setAnnotationEnglish", () => {
+  const contexts = [
+    { view: "v1", context: "m1" },
+    { view: "v1", context: "m2" },
+  ];
+
+  it.effect("posts the switch and the messages on screen, and returns the new state", () =>
+    Effect.gen(function* () {
+      const english = { on: true, until: 1_800_003_600_000, at: 1_800_000_000_000 };
+      const { requests, run } = collectorWith(
+        setAnnotationEnglish({ on: true, contexts }),
+        configured,
+        { status: 200, body: { ok: true, english } },
+      );
+      assert.deepStrictEqual(yield* run, english);
+      assert.deepStrictEqual(requests, [
+        {
+          method: "POST",
+          url: "http://collector.test:7853/v1/english",
+          body: JSON.stringify({ on: true, source: "t3", contexts }),
+        },
+      ]);
+    }),
+  );
+
+  it.effect(
+    "fails as not configured, with the collector's error or its status, and is made here out of reach",
+    () =>
+      Effect.gen(function* () {
+        const off = setAnnotationEnglish({ on: false, contexts: [] });
+        const unset = collectorWith(off, {}, { status: 200, body: { ok: true } });
+        assert.strictEqual((yield* Effect.flip(unset.run)).message, "not configured");
+        assert.strictEqual(unset.requests.length, 0);
+        const refused = collectorWith(off, configured, {
+          status: 400,
+          body: { ok: false, error: "chat surface is paused" },
+        });
+        assert.strictEqual((yield* Effect.flip(refused.run)).message, "chat surface is paused");
+        const empty = collectorWith(off, configured, { status: 200, body: { ok: true } });
+        assert.strictEqual((yield* Effect.flip(empty.run)).message, "collector answered 200");
+        // Out of reach, the press is made here instead.
+        yield* TestClock.setTime(1_800_000_000_000);
+        const down = collectorWith(off, configured, null);
+        assert.deepStrictEqual(yield* down.run, { on: false, until: 0, at: 1_800_000_000_000 });
+      }),
+  );
+});
+
+/**
+ * A fake collector that answers each path with `answers[path]` (and takes every op sent to `/v1/ops`) while `up`, and
+ * can't be reached otherwise. The calls share one state dir, as one server's do.
+ */
+const collectorThatGoesDown = (answers: Record<string, unknown>, stateDir: string) => {
+  const collector = { up: true };
+  const requests: Array<{ readonly method: string; readonly path: string; readonly body: string }> =
+    [];
+  const client = HttpClient.make((request) => {
+    const body =
+      request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
+    const path = new URL(request.url).pathname;
+    requests.push({ method: request.method, path, body });
+    if (!collector.up) {
+      return Effect.fail(
+        new HttpClientError.HttpClientError({
+          reason: new HttpClientError.TransportError({ request }),
+        }),
+      );
+    }
+    const answer =
+      path === "/v1/ops"
+        ? {
+            ok: true,
+            results: (JSON.parse(body) as { ops: unknown[] }).ops.map(() => ({ ok: true })),
+            rev: "r2",
+          }
+        : answers[path];
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(request, new Response(JSON.stringify(answer), { status: 200 })),
+    );
+  });
+  const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.provideService(HttpClient.HttpClient, client),
+      Effect.provide(serverLayer(configured, stateDir)),
+    );
+  return { collector, requests, run };
+};
+
+it.layer(NodeServices.layer)("while the collector is out of reach", (it) => {
+  const T0 = 1_800_000_000_000;
+  const HOUR = 3_600_000;
+  const status = {
+    ok: true,
+    intensity: { level: 1, until: T0 + HOUR, at: T0 - HOUR },
+    english: { on: false, until: 0, at: 0 },
+    sentences: { level: -1, until: T0 + HOUR, at: T0 - HOUR },
+  };
+
+  it.effect(
+    "presses are made here from the status last read, and reach the collector, in order, with the next read",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+        const { collector, requests, run } = collectorThatGoesDown(
+          { "/v1/intensity": status },
+          stateDir,
+        );
+        yield* TestClock.setTime(T0);
+        yield* run(getAnnotationStatus());
+
+        collector.up = false;
+        assert.deepStrictEqual(yield* run(adjustAnnotationIntensity({ step: 1 })), {
+          level: 2,
+          until: T0 + 3 * HOUR,
+        });
+        yield* TestClock.setTime(T0 + 60_000);
+        const contexts = [{ view: "v1", context: "m1" }];
+        assert.deepStrictEqual(yield* run(setAnnotationEnglish({ on: true, contexts })), {
+          on: true,
+          until: T0 + 60_000 + HOUR,
+          at: T0 + 60_000,
+        });
+        // Back, but presses still wait: a new one is kept after them, so they reach it in the order made. Only the
+        // first press tried the collector; once one waits, the rest are made here at once.
+        collector.up = true;
+        yield* TestClock.setTime(T0 + 120_000);
+        assert.deepStrictEqual(
+          yield* run(adjustAnnotationIntensity({ step: -1, surface: "sentences" })),
+          { level: -2, until: T0 + 120_000 + 3 * HOUR },
+        );
+        assert.deepStrictEqual(
+          requests.slice(1).map((request) => request.path),
+          ["/v1/intensity"],
+        );
+
+        // A read out of reach answers with what is kept here, and the word level runs out as the collector's would.
+        collector.up = false;
+        yield* TestClock.setTime(T0 + 3 * HOUR);
+        assert.deepStrictEqual(yield* run(getAnnotationStatus()), {
+          intensity: { level: 0, until: 0 },
+          english: { on: false, until: 0, at: T0 + 60_000 },
+          sentences: { level: -2, until: T0 + 120_000 + 3 * HOUR },
+        });
+
+        // The next read that reaches it sends the presses as the collector's own ops, then reads its status.
+        collector.up = true;
+        requests.length = 0;
+        assert.deepStrictEqual(yield* run(getAnnotationStatus()), {
+          intensity: { level: 1, until: T0 + HOUR },
+          english: { on: false, until: 0, at: 0 },
+          sentences: { level: -1, until: T0 + HOUR },
+        });
+        assert.deepStrictEqual(
+          requests.map((request) => `${request.method} ${request.path}`),
+          ["POST /v1/ops", "GET /v1/intensity"],
+        );
+        const sent = JSON.parse(requests[0]!.body) as {
+          machine: string;
+          ops: Array<Record<string, unknown>>;
+        };
+        const stamp = (at: number) => ({
+          uid: sent.ops.find((op) => op.at === at)?.uid,
+          day: sent.ops.find((op) => op.at === at)?.day,
+          at,
+          machine: sent.machine,
+        });
+        assert.deepStrictEqual(sent.ops, [
+          {
+            ...stamp(T0),
+            kind: "set",
+            prefs: { intensity_chat: { level: 2, until: T0 + 3 * HOUR, at: T0, source: "t3" } },
+          },
+          {
+            ...stamp(T0 + 60_000),
+            kind: "english",
+            on: true,
+            until: T0 + 60_000 + HOUR,
+            source: "t3",
+            contexts,
+          },
+          {
+            ...stamp(T0 + 120_000),
+            kind: "set",
+            prefs: {
+              intensity_sentences: {
+                level: -2,
+                until: T0 + 120_000 + 3 * HOUR,
+                at: T0 + 120_000,
+                source: "t3",
+              },
+            },
+          },
+        ]);
+        assert.strictEqual(new Set(sent.ops.map((op) => op.uid)).size, 3);
+        assert.match(String(sent.ops[0]!.day), /^\d{4}-\d{2}-\d{2}$/);
+
+        // Nothing waits any more, so the next press goes to the collector again.
+        requests.length = 0;
+        yield* run(adjustAnnotationIntensity({ step: 1 }));
+        assert.deepStrictEqual(
+          requests.map((request) => `${request.method} ${request.path}`),
+          ["POST /v1/intensity"],
+        );
+      }),
+  );
+
+  it.effect("presses kept here wait while the collector stays out of reach", () =>
+    Effect.gen(function* () {
+      const stateDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+      const { collector, requests, run } = collectorThatGoesDown(
+        { "/v1/intensity": status },
+        stateDir,
+      );
+      yield* TestClock.setTime(T0);
+      collector.up = false;
+      // A press steps past an end and stays there, as the collector's does.
+      for (let press = 0; press < 5; press += 1) yield* run(adjustAnnotationIntensity({ step: 1 }));
+      assert.deepStrictEqual(yield* run(getAnnotationStatus()), {
+        intensity: { level: 3, until: T0 + 3 * HOUR },
+        english: { on: false, until: 0, at: 0 },
+      });
+      yield* run(getAnnotationStatus());
+      collector.up = true;
+      requests.length = 0;
+      yield* run(getAnnotationStatus());
+      const sent = JSON.parse(requests[0]!.body) as { ops: Array<{ prefs: unknown }> };
+      assert.deepStrictEqual(
+        sent.ops.map((op) => op.prefs),
+        [1, 2, 3, 3, 3].map((level) => ({
+          intensity_chat: { level, until: T0 + 3 * HOUR, at: T0, source: "t3" },
+        })),
+      );
+    }),
+  );
+});

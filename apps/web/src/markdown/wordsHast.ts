@@ -17,6 +17,7 @@ import { GITHUB_ALERT_MARKER } from "@t3tools/shared/markdownGithubAlerts";
 import { absoluteFilePathMatches } from "@t3tools/shared/markdownLinks";
 import {
   rehypeNormalizeLocalFileLinks,
+  rehypePreserveAbbreviationTitles,
   rehypePreserveImageSourceMeta,
   sanitizeChatHast,
 } from "@t3tools/shared/markdownHast";
@@ -64,6 +65,8 @@ export interface WordsHastOptions {
   /** `★ Insight ───` blocks render as insight callouts. */
   readonly insights: boolean;
   readonly extensions: MarkdownExtensions;
+  /** Runs on the sanitized tree after heading ids are added, as a rehype plugin there would. */
+  readonly transform?: ((tree: Root) => void) | undefined;
 }
 
 const CODEX_DIRECTIVES = ["codex-file-citation", "codex-followup", "artifact-template"];
@@ -126,6 +129,8 @@ function properties(source: string | undefined, inSvg: boolean): Element["proper
   for (const match of source.matchAll(ATTRIBUTE)) {
     const name = match[1]!;
     const info = find(inSvg ? svgSchema : htmlSchema, inSvg ? name : name.toLowerCase());
+    // As in an HTML parser, the first of a repeated attribute counts (a chat level's `data-on`).
+    if (Object.hasOwn(result, info.property)) continue;
     const raw = match[2] ?? match[3] ?? match[4];
     if (raw === undefined) {
       result[info.property] = info.boolean || info.overloadedBoolean ? true : "";
@@ -141,6 +146,80 @@ function properties(source: string | undefined, inSvg: boolean): Element["proper
           : value;
   }
   return result;
+}
+
+// Chat levels (@t3tools/shared/markdownLevel), as rehypeMarkLevelTags marks them before an HTML parser.
+const LEVEL_ATTRIBUTE = /\sdata-(?:on|jw)\s*=/i;
+const LEVEL_BLOCKS = new Set([
+  "p",
+  "li",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "td",
+  "th",
+  "dt",
+  "dd",
+]);
+
+const isLevelTag = (node: Element) =>
+  node.tagName === "abbr" ||
+  (node.tagName === "span" &&
+    (node.properties.dataOn !== undefined || node.properties.dataJw !== undefined));
+
+/**
+ * Marks each abbr, and each span with levels, that an end tag or its block's end closed for it
+ * (`data-unclosed`: "end" in the message's last block, else "block"), and a span right after a
+ * closing span and a comment `data-apart`, so twins a comment separates don't pair.
+ */
+function levelTags() {
+  const unclosed: Array<{ element: Element; nested: boolean; block: Root | Element }> = [];
+  // 1 after a closing span, 2 after a closing span and a comment, with only whitespace between.
+  let apart = 0;
+  let opensApart = false;
+  return {
+    between(text: string) {
+      if (text.trim() !== "") apart = 0;
+    },
+    token(tagName: string | undefined, closing: boolean) {
+      opensApart = tagName === "span" && !closing && apart === 2;
+      apart = tagName === undefined ? (apart > 0 ? 2 : 0) : closing && tagName === "span" ? 1 : 0;
+    },
+    open(element: Element) {
+      if (opensApart) element.properties.dataApart = "";
+    },
+    /** Elements from `from` up close without their own end tag; `nested` when an outer abbr or span's did. */
+    close(stack: ReadonlyArray<Root | Element>, from: number, nested: boolean) {
+      for (let index = from; index < stack.length; index++) {
+        const element = stack[index] as Element;
+        if (!isLevelTag(element)) continue;
+        const block = stack
+          .slice(0, index)
+          .findLast((node) => node.type === "root" || LEVEL_BLOCKS.has(node.tagName))!;
+        unclosed.push({ element, nested, block });
+      }
+    },
+    mark(root: Root) {
+      if (unclosed.length === 0) return;
+      let lastBlock: Root | Element = root;
+      const visit = (node: Root | Element, block: Root | Element) => {
+        if (node.type === "element" && (node.tagName === "code" || node.tagName === "pre")) return;
+        for (const child of node.children) {
+          if (child.type === "text" && child.value.trim() !== "") lastBlock = block;
+          if (child.type === "element") {
+            visit(child, LEVEL_BLOCKS.has(child.tagName) ? child : block);
+          }
+        }
+      };
+      visit(root, root);
+      for (const { element, nested, block } of unclosed) {
+        element.properties.dataUnclosed = !nested && block === lastBlock ? "end" : "block";
+      }
+    },
+  };
 }
 
 interface Tokenized {
@@ -159,6 +238,7 @@ function tokenize(html: string, offsetOf: (byte: number) => number): Tokenized {
   const stack: Array<Root | Element> = [root];
   let svgDepth = 0;
   let last = 0;
+  const levels = levelTags();
   // rehypePreserveBareAnchorPlaceholders: an `<a>` with no attributes that never closes is text.
   const anchors: Array<{ element: Element; parent: Root | Element; tag: string } | null> = [];
   const text = (end: number) => {
@@ -170,9 +250,11 @@ function tokenize(html: string, offsetOf: (byte: number) => number): Tokenized {
     else parent.children.push({ type: "text", value } as Text);
   };
   for (const match of html.matchAll(TAG)) {
+    levels.between(html.slice(last, match.index));
     text(match.index);
     last = match.index + match[0].length;
     const tagName = match[2]?.toLowerCase();
+    levels.token(tagName, match[1] === "/");
     if (!tagName) continue;
     if (match[1]) {
       if (tagName === "a") anchors.pop();
@@ -188,6 +270,7 @@ function tokenize(html: string, offsetOf: (byte: number) => number): Tokenized {
       }
       const at = stack.findLastIndex((node) => node.type === "element" && node.tagName === tagName);
       if (at > 0) {
+        levels.close(stack, at + 1, tagName === "abbr" || tagName === "span");
         for (let index = at; index < stack.length; index++) {
           if ((stack[index] as Element).tagName === "svg") svgDepth--;
         }
@@ -196,10 +279,20 @@ function tokenize(html: string, offsetOf: (byte: number) => number): Tokenized {
       continue;
     }
     const inSvg = svgDepth > 0 || tagName === "svg";
+    // A self-closing abbr or chat level span has no text to show, and an HTML parser would let it
+    // take in the rest of its block.
+    if (
+      match[4] &&
+      !inSvg &&
+      (tagName === "abbr" || (tagName === "span" && LEVEL_ATTRIBUTE.test(match[3] ?? "")))
+    ) {
+      continue;
+    }
     if (!inSvg && tagName === "li") {
       for (let index = stack.length - 1; index > 0; index--) {
         const openTag = (stack[index] as Element).tagName;
         if (openTag === "li") {
+          levels.close(stack, index, false);
           stack.length = index;
           break;
         }
@@ -208,7 +301,10 @@ function tokenize(html: string, offsetOf: (byte: number) => number): Tokenized {
     }
     if (!inSvg && CLOSES_PARAGRAPH.has(tagName)) {
       const paragraph = openParagraph(stack);
-      if (paragraph > 0) stack.length = paragraph;
+      if (paragraph > 0) {
+        levels.close(stack, paragraph, false);
+        stack.length = paragraph;
+      }
     }
     const element: Element = {
       type: "element",
@@ -226,6 +322,7 @@ function tokenize(html: string, offsetOf: (byte: number) => number): Tokenized {
       };
       positioned.push(element);
     }
+    levels.open(element);
     const parent = stack.at(-1)!;
     (parent.children as ElementContent[]).push(element);
     if (tagName === "a") {
@@ -237,7 +334,10 @@ function tokenize(html: string, offsetOf: (byte: number) => number): Tokenized {
       if (tagName === "svg") svgDepth++;
     }
   }
+  levels.between(html.slice(last));
   text(html.length);
+  levels.close(stack, 1, false);
+  levels.mark(root);
   for (const anchor of anchors) {
     if (!anchor) continue;
     const siblings = anchor.parent.children as ElementContent[];
@@ -934,6 +1034,7 @@ const addHeadingIds = rehypeHeadingIds();
 const addTextDirection = rehypeTextDirection();
 const preserveImageSourceMeta = rehypePreserveImageSourceMeta();
 const normalizeLocalFileLinks = rehypeNormalizeLocalFileLinks();
+const preserveAbbreviationTitles = rehypePreserveAbbreviationTitles();
 const groupChipPunctuation = rehypeChipPunctuation();
 
 const INSIGHT_OPENING = /^( {0,3})(`?)★ Insight[ \t]+─{3,}\2[ \t]*$/u;
@@ -1277,6 +1378,7 @@ export function wordsHast(text: string, options: WordsHastOptions): Root {
   transform(tree, walk, false, false);
   preserveImageSourceMeta(tree as never);
   normalizeLocalFileLinks(tree as never);
+  preserveAbbreviationTitles(tree as never);
   const hast = sanitizeChatHast(tree);
   if (walk.math.size > 0) restoreMath(hast, walk.math);
   if (insights) restorePositions(hast, insights.toOriginal);
@@ -1284,6 +1386,7 @@ export function wordsHast(text: string, options: WordsHastOptions): Root {
   if (extensions.inert) makeInert(hast);
   if (extensions.preview) return flattenPreview(hast, extensions.preview);
   addHeadingIds(hast);
+  options.transform?.(hast);
   addTextDirection(hast as never);
   groupChipPunctuation(hast as never);
   return hast;

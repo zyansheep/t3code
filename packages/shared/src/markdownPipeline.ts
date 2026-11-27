@@ -1,3 +1,4 @@
+import { rehypeMarkLevelTags } from "./markdownLevel.ts";
 import type {
   Heading,
   Link,
@@ -31,6 +32,7 @@ import {
   CHAT_MARKDOWN_SANITIZE_SCHEMA,
   chatMarkdownImageSource,
   rehypeNormalizeLocalFileLinks,
+  rehypePreserveAbbreviationTitles,
   rehypePreserveImageSourceMeta,
   type ChatMarkdownImageProperties,
 } from "./markdownHast.ts";
@@ -226,9 +228,11 @@ function rehypeRawWhenPresent(this: Processor) {
 
 export const CHAT_MARKDOWN_REHYPE_PLUGINS: PluggableList = [
   rehypePreserveBareAnchorPlaceholders,
+  rehypeMarkLevelTags,
   rehypeRawWhenPresent,
   rehypePreserveImageSourceMeta,
   rehypeNormalizeLocalFileLinks,
+  rehypePreserveAbbreviationTitles,
   [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],
 ];
 

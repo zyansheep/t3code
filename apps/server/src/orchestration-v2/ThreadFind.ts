@@ -73,6 +73,13 @@ class TextKey extends Data.Class<{
   cwd: string | undefined;
   skills: NonNullable<OrchestrationV2SearchThreadInput["skills"]>;
   theme: OrchestrationV2SearchThreadInput["theme"];
+  /**
+   * The client's chat levels for assistant messages (words, then sentences), flat so keys compare by value; `null`
+   * reads them as written.
+   */
+  level: number | null;
+  sentenceLevel: number | null;
+  englishOnly: boolean;
 }> {}
 
 function textKey(
@@ -80,6 +87,7 @@ function textKey(
   cwd: string | undefined,
   skills: TextKey["skills"],
   theme: TextKey["theme"],
+  chatLevel: OrchestrationV2SearchThreadInput["chatLevel"],
 ) {
   return new TextKey({
     text:
@@ -95,6 +103,12 @@ function textKey(
     cwd,
     skills,
     theme,
+    level: item.type === "assistant_message" && chatLevel ? chatLevel.level : null,
+    sentenceLevel:
+      item.type === "assistant_message" && chatLevel
+        ? (chatLevel.sentenceLevel ?? chatLevel.level)
+        : null,
+    englishOnly: item.type === "assistant_message" && chatLevel ? chatLevel.englishOnly : false,
   });
 }
 
@@ -111,6 +125,13 @@ function parseText(key: TextKey): readonly string[] {
         key.cwd,
         key.skills,
         key.theme,
+        key.level === null
+          ? undefined
+          : {
+              level: key.level,
+              sentenceLevel: key.sentenceLevel ?? key.level,
+              englishOnly: key.englishOnly,
+            },
       ) ?? []);
 }
 
@@ -212,6 +233,7 @@ export const makeThreadFind = Effect.fn("makeThreadFind")(function* (
         query: Schema.optional(Schema.String),
         skills: OrchestrationV2SearchThreadInput.fields.skills,
         theme: OrchestrationV2SearchThreadInput.fields.theme,
+        chatLevel: OrchestrationV2SearchThreadInput.fields.chatLevel,
       }),
     ),
   );
@@ -328,6 +350,7 @@ export const makeThreadFind = Effect.fn("makeThreadFind")(function* (
         query: input.query,
         skills: input.skills ?? [],
         ...(theme === undefined ? {} : { theme }),
+        ...(input.chatLevel ? { chatLevel: input.chatLevel } : {}),
       });
       const cached = scans.get(cacheKey);
       if (cached && cached.sequence === (yield* readRevision(cached.sourceThreadIds))) {
@@ -341,6 +364,7 @@ export const makeThreadFind = Effect.fn("makeThreadFind")(function* (
         cwd,
         skills: input.skills ?? [],
         ...(theme === undefined ? {} : { theme }),
+        ...(input.chatLevel ? { chatLevel: input.chatLevel } : {}),
       });
       const rendered = renderedSnapshot.current;
       if (
@@ -456,7 +480,13 @@ export const makeThreadFind = Effect.fn("makeThreadFind")(function* (
             rendered = row;
           } else {
             const decoded = yield* decode(row);
-            const key = textKey(decoded.item, cwd, input.skills ?? [], input.theme);
+            const key = textKey(
+              decoded.item,
+              cwd,
+              input.skills ?? [],
+              input.theme,
+              input.chatLevel,
+            );
             const segments =
               decoded.item.type === "assistant_message" &&
               decoded.item.text === "" &&

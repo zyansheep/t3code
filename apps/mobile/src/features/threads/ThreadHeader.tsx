@@ -1,3 +1,4 @@
+import type { EnvironmentId } from "@t3tools/contracts";
 import { useGT, useMessages } from "gt-react-native";
 
 import { AppBar } from "../../components/ui/AppBar";
@@ -13,6 +14,7 @@ import {
   useThreadGitMenuDefinition,
   type ThreadGitControlsProps,
 } from "./ThreadGitControls";
+import { useChatJapaneseActions } from "./useChatJapaneseActions";
 
 export function ThreadHeader(props: {
   readonly title: string;
@@ -30,6 +32,7 @@ export function ThreadHeader(props: {
   const { toggleAuxiliaryPane, startNewTask } = useAdaptiveWorkspaceLayout();
   const { panes } = useWorkspacePaneState();
   const gitMenu = useThreadGitMenuDefinition(props.gitControls);
+  const japaneseActions = useChatJapaneseActions(props.gitControls.environmentId as EnvironmentId);
   const terminalMenu = threadTerminalMenu(props.gitControls, m);
   const filesVisible = props.inspectorMode === "files" && panes.auxiliaryPaneVisible;
   const actions: AppBarAction[] = props.hasThreadCwd
@@ -61,7 +64,7 @@ export function ThreadHeader(props: {
             }
           : undefined
       }
-      actions={actions}
+      actions={[...actions, ...japaneseActions]}
       menus={menus}
       hideBottomBorder
     />

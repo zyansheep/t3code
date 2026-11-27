@@ -1,0 +1,262 @@
+/**
+ * Words tapped open on the phone, and nothing else: it has no line positions or read depth, and the collector reads any
+ * listed but unopened word as seen and not looked up. So each word gets its own `phone-` view whose context lists only
+ * that word, sent without a word count, which the collector then treats as an opened-only episode, never a message read.
+ * The same queue carries the review screen's items (lib/reviewSession.ts).
+ */
+import type { AnnotationQueuedInteraction, AnnotationOpen } from "@t3tools/contracts";
+import { ANNOTATION_REPORT_MAX_ITEMS, AnnotationReportError } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+
+const WORD_MAX_LENGTH = 40;
+/** The collector rejects items older than 7 days, so older ones are not worth keeping. */
+const MAX_AGE_MS = 7 * 86_400_000;
+const MAX_QUEUED = 300;
+
+/** 32-bit FNV-1a over UTF-16 code units, as the desktop hashes a message for its context id. */
+export function fnv1a32(input: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+/** A message's context id, as the desktop names the message from its text. */
+export function glossContextId(messageText: string): string {
+  return `m${fnv1a32(messageText).toString(36)}`;
+}
+
+/**
+ * The messages on screen for an English-only press, as the phone's reports name them: per word opened in a message, that
+ * open's own view with the message's context, the pairs the collector has records of. The phone sends no word counts,
+ * so a message with no word opened has no record and is left out. At most 30, as the server takes.
+ */
+export function glossContextsOf(
+  contexts: ReadonlyArray<string>,
+  openedViews: ReadonlyMap<string, ReadonlySet<string>>,
+): Array<{ view: string; context: string }> {
+  return contexts
+    .flatMap((context) => [...(openedViews.get(context) ?? [])].map((view) => ({ view, context })))
+    .slice(0, 30);
+}
+
+/** A session id, once per app run: a later run is a new showing of the same message, as a new desktop window is. */
+export function glossOpenSession(nowMs: number, random: string): string {
+  return `${nowMs.toString(36)}${random}`;
+}
+
+/**
+ * The report of one word tapped open, or null when the collector would not take the word (as the desktop skips it).
+ * It carries `level`, the word level its message was rendered at (lib/markdownLevels.ts), when that is one the contract
+ * takes, -3 to 3 (one item the server can't decode would fail its whole batch), and `sentenceLevel`, the sentence level,
+ * when that is one too and differs from it.
+ */
+// One view per word: a context keeps only its latest list, so a growing list would make later words look unopened
+// in an earlier episode. A tap counts whatever its length and may never be closed, so dwellMs stays 0.
+export function glossOpenItem(input: {
+  readonly session: string;
+  readonly sequence: number;
+  readonly messageText: string;
+  readonly word: string;
+  readonly at: number;
+  readonly level?: number | undefined;
+  readonly sentenceLevel?: number | undefined;
+}): AnnotationOpen | null {
+  const word = input.word.trim();
+  if (word.length === 0 || word.length > WORD_MAX_LENGTH) return null;
+  const { level, sentenceLevel } = input;
+  const rendered = !isLevel(level)
+    ? {}
+    : isLevel(sentenceLevel) && sentenceLevel !== level
+      ? { level, sentenceLevel }
+      : { level };
+  return {
+    kind: "pin",
+    word,
+    at: input.at,
+    dwellMs: 0,
+    view: `phone-${input.session}-${fnv1a32(word).toString(36)}`,
+    context: glossContextId(input.messageText),
+    position: 0,
+    box: [0, 0, 0, 0],
+    annotations: [[word, 0, 0]],
+    ...rendered,
+    uid: `phone-${input.session}-${input.sequence}`,
+  };
+}
+
+const isLevel = (level: number | undefined): level is number =>
+  level !== undefined && Number.isInteger(level) && level >= -3 && level <= 3;
+
+export interface QueuedGlossOpen {
+  readonly environmentId: string;
+  readonly item: AnnotationQueuedInteraction;
+}
+
+/**
+ * How a server answered one batch: stored all of it (`true`), not reached or failed (`false`: the batch stays queued
+ * and goes again under the same uids), or stored all but the items it refused, by index in the batch, for good.
+ */
+export type GlossOpenSendResult = boolean | { readonly rejected: ReadonlyArray<number> };
+
+const isReportError = Schema.is(AnnotationReportError);
+
+/**
+ * What a failed report means for its batch: refused items for good when the server says the rest was stored, else
+ * (the collector out of reach, the connection, an older server) the whole batch again later.
+ */
+export function failedReportResult(failure: unknown): GlossOpenSendResult {
+  if (!isReportError(failure) || failure.retryable) return false;
+  return { rejected: (failure.rejected ?? []).map((refused) => refused.item) };
+}
+
+export interface GlossOpenQueueOptions {
+  /** Reads what an earlier run left; throws or returns junk when there is nothing usable. */
+  readonly load: () => Promise<unknown>;
+  readonly save: (entries: ReadonlyArray<QueuedGlossOpen>) => Promise<void>;
+  /** Sends one batch to one environment. */
+  readonly send: (
+    environmentId: string,
+    items: ReadonlyArray<AnnotationQueuedInteraction>,
+  ) => Promise<GlossOpenSendResult>;
+  readonly isItem: (value: unknown) => value is AnnotationQueuedInteraction;
+  readonly now: () => number;
+}
+
+/**
+ * A small queue that survives a restart: the oldest go first, past MAX_QUEUED the oldest are dropped, and each batch
+ * stays queued until its server has taken it. No method rejects, so a failed report can't reach the UI.
+ */
+export function createGlossOpenQueue(options: GlossOpenQueueOptions) {
+  let entries: ReadonlyArray<QueuedGlossOpen> = [];
+  let flushing: Promise<void> | null = null;
+  let flushAgain = false;
+  /** Who waits on an item's fate, by uid: true once its server took it, false if it was dropped unsent. */
+  const waiters = new Map<string, Array<(taken: boolean) => void>>();
+
+  const settle = (uids: Iterable<string | undefined>, taken: boolean) => {
+    for (const uid of uids) {
+      if (uid === undefined) continue;
+      for (const resolve of waiters.get(uid) ?? []) resolve(taken);
+      waiters.delete(uid);
+    }
+  };
+
+  const bounded = (list: ReadonlyArray<QueuedGlossOpen>) => {
+    const oldest = options.now() - MAX_AGE_MS;
+    const kept = list.filter((entry) => entry.item.at >= oldest).slice(-MAX_QUEUED);
+    if (kept.length < list.length) {
+      const left = new Set(kept.map((entry) => entry.item.uid));
+      settle(
+        list.filter((entry) => !left.has(entry.item.uid)).map((entry) => entry.item.uid),
+        false,
+      );
+    }
+    return kept;
+  };
+
+  const persist = async () => {
+    try {
+      await options.save(entries);
+    } catch {
+      // Only a restart before the next write can lose these.
+    }
+  };
+
+  const loaded = (async () => {
+    try {
+      const stored = await options.load();
+      if (!Array.isArray(stored)) return;
+      const restored = stored.filter(
+        (entry): entry is QueuedGlossOpen =>
+          typeof entry?.environmentId === "string" &&
+          options.isItem(entry?.item) &&
+          entry.item.uid !== undefined,
+      );
+      const seen = new Set(entries.map((entry) => entry.item.uid));
+      entries = bounded([...restored.filter((entry) => !seen.has(entry.item.uid)), ...entries]);
+    } catch {
+      // A missing or unreadable file is an empty queue.
+    }
+  })();
+
+  /** The batch has left the queue: its items were stored, but for those the server refused for good. */
+  const remove = (
+    batch: ReadonlyArray<AnnotationQueuedInteraction>,
+    refused: ReadonlySet<number>,
+  ) => {
+    const gone = new Set(batch.map((item) => item.uid));
+    entries = entries.filter((entry) => !gone.has(entry.item.uid));
+    settle(
+      batch.filter((_, index) => !refused.has(index)).map((item) => item.uid),
+      true,
+    );
+    settle(
+      batch.filter((_, index) => refused.has(index)).map((item) => item.uid),
+      false,
+    );
+  };
+
+  const drain = async () => {
+    await loaded;
+    entries = bounded(entries);
+    const failed = new Set<string>();
+    for (;;) {
+      const first = entries.find((entry) => !failed.has(entry.environmentId));
+      if (first === undefined) break;
+      const batch = entries
+        .filter((entry) => entry.environmentId === first.environmentId)
+        .slice(0, ANNOTATION_REPORT_MAX_ITEMS)
+        .map((entry) => entry.item);
+      let sent: GlossOpenSendResult = false;
+      try {
+        sent = await options.send(first.environmentId, batch);
+      } catch {
+        sent = false;
+      }
+      if (sent === false) failed.add(first.environmentId);
+      else remove(batch, new Set(sent === true ? [] : sent.rejected));
+    }
+    await persist();
+  };
+
+  const flush = (): Promise<void> => {
+    if (flushing !== null) {
+      flushAgain = true;
+      return flushing;
+    }
+    flushing = (async () => {
+      do {
+        flushAgain = false;
+        await drain();
+      } while (flushAgain);
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        flushing = null;
+      });
+    return flushing;
+  };
+
+  const add = async (entry: QueuedGlossOpen): Promise<void> => {
+    entries = bounded([...entries, entry]);
+    await loaded;
+    await persist();
+  };
+
+  /**
+   * Settles once the item with `uid` has left the queue: true when its server stored it (in this flush or a later
+   * retry), false when the server refused it for good or it was dropped unsent. An item not queued counts as stored.
+   */
+  const settled = (uid: string): Promise<boolean> =>
+    loaded.then(() => {
+      if (!entries.some((entry) => entry.item.uid === uid)) return true;
+      return new Promise<boolean>((resolve) => {
+        waiters.set(uid, [...(waiters.get(uid) ?? []), resolve]);
+      });
+    });
+
+  return { add, flush, settled, pending: () => entries };
+}

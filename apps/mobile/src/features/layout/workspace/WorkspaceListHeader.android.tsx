@@ -87,6 +87,7 @@ export function WorkspaceListHeader(props: WorkspaceListHeaderProps) {
             ]
           : undefined
       }
+      trailing={searching ? undefined : props.trailing}
     />
   );
 }

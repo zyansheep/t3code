@@ -112,6 +112,7 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import {
+  FetchHttpClient,
   HttpRouter,
   HttpServerRequest,
   HttpServerRespondable,
@@ -122,6 +123,13 @@ import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as ServerConfig from "./config.ts";
+import {
+  adjustAnnotationIntensity,
+  forwardAnnotationInteractions,
+  getAnnotationStatus,
+  nextAnnotationReview,
+  setAnnotationEnglish,
+} from "./annotationInteractions.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -2907,6 +2915,16 @@ export const layerWsRpc = (
               ),
             ),
           ),
+        [WS_METHODS.serverReportAnnotationInteractions]: (input) =>
+          forwardAnnotationInteractions(input).pipe(Effect.provide(FetchHttpClient.layer)),
+        [WS_METHODS.serverAdjustAnnotationIntensity]: (input) =>
+          adjustAnnotationIntensity(input).pipe(Effect.provide(FetchHttpClient.layer)),
+        [WS_METHODS.serverNextAnnotationReview]: (input) =>
+          nextAnnotationReview(input).pipe(Effect.provide(FetchHttpClient.layer)),
+        [WS_METHODS.serverGetAnnotationStatus]: (_input) =>
+          getAnnotationStatus().pipe(Effect.provide(FetchHttpClient.layer)),
+        [WS_METHODS.serverSetAnnotationEnglish]: (input) =>
+          setAnnotationEnglish(input).pipe(Effect.provide(FetchHttpClient.layer)),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) => relayClient.resolve,
         [WS_METHODS.cloudInstallRelayClient]: (_input) =>
           Stream.callback<RelayClientInstallProgressEvent, RelayClientInstallFailedError>((queue) =>

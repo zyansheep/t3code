@@ -18,6 +18,8 @@ import { taskListMarkerOffset } from "@t3tools/shared/markdownTaskEdits";
 import { isHostPath, resolveWorkspaceFilePath } from "@t3tools/shared/path";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import {
+  type AnnotationInteraction,
+  type AnnotationReading,
   AuthFilesystemReadScope,
   AuthOrchestrationOperateScope,
   SOURCE_CONTROL_MEDIA_ASSET,
@@ -83,6 +85,7 @@ import React, {
   use,
   memo,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useRef,
   useState,
@@ -117,6 +120,7 @@ import {
   showExternalLinkContextMenu,
 } from "./chat/externalLinkContextMenu";
 import { SharedTooltipTrigger } from "./ui/shared-tooltip";
+import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { recordVisitForThread } from "../browserHistoryStore";
@@ -127,7 +131,7 @@ import {
   usePreferredEditor,
 } from "../editorPreferences";
 import { openInEditorMenuLabel } from "../editorLabels";
-import { resolveDiffThemeName } from "../lib/diffRendering";
+import { fnv1a32, resolveDiffThemeName } from "../lib/diffRendering";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
 import { useRenderedAppearance } from "../hooks/useTheme";
 import { useClientSettings } from "../hooks/useSettings";
@@ -165,6 +169,17 @@ import {
 } from "../state/session";
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
+import { reportAnnotationInteractions } from "../state/annotationInteractions";
+import {
+  annotationStatusKnownAtom,
+  chatLevelAtom,
+  englishOnlyAtom,
+  japaneseTintAtom,
+  sentenceLevelAtom,
+  watchAnnotationStatus,
+} from "../state/annotationStatus";
+import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
+import { describeAnnotations, registerReadingMessage } from "../lib/annotationReading";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { projectEnvironment } from "../state/projects";
 import { filesystemEnvironment } from "../state/filesystem";
@@ -225,6 +240,7 @@ import { MarkdownExternalLinkContent } from "./chat/MarkdownExternalLink";
 import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 import { canUseMarkdownFileShellActions } from "./chat/MarkdownFileLink.logic";
 import { handleMarkdownFragmentClick } from "./chat/markdownFragments";
+import { type ChatLevel, rehypeChatLevel } from "@t3tools/shared/markdownLevel";
 import { hastHasText, hastPlainTextDeep, plainHastText } from "./chat/markdownHast.logic";
 import {
   extractCodeBlock,
@@ -440,6 +456,17 @@ function safeUrl(value: string): string {
     SAFE_PROTOCOL.test(value.slice(0, colon))
     ? value
     : "";
+}
+
+// Chat levels run after heading ids, so links to a heading keep working in English. One transform per pair of levels
+// and English only, finished or streaming, so each keeps its renderer and parse cache.
+const levelTransforms = new Map<string, ReturnType<typeof rehypeChatLevel>>();
+function levelTransform(options: Required<ChatLevel>) {
+  const { level, sentenceLevel, englishOnly, streaming } = options;
+  const key = `${level} ${sentenceLevel} ${englishOnly} ${streaming}`;
+  let transform = levelTransforms.get(key);
+  if (!transform) levelTransforms.set(key, (transform = rehypeChatLevel(options)));
+  return transform;
 }
 
 function markdownUrlTransform(href: string) {
@@ -1161,6 +1188,51 @@ const CITATION_ENDS_BLOCK = new RegExp(
   String.raw`^[ \t]*(?:$|\n[ \t]*(?:\n|$)|\n[ \t>]*${LIST_MARKER})`,
 );
 
+// One popover per message shows every abbreviation's expansion; each <abbr> is only a trigger.
+const MarkdownAbbreviationContext = React.createContext<ReturnType<
+  typeof PopoverCreateHandle<string>
+> | null>(null);
+const ABBREVIATION_HOVER_DELAY_MS = 300;
+// One renderer session (its start time), so a reader's later visits to the same message stay apart.
+const ANNOTATION_VIEW = `v${Math.round(performance.timeOrigin).toString(36)}`;
+
+/**
+ * The opened abbreviation plus every abbreviation in the same message, by text and position only, as the message was
+ * rendered when it opened: a level change can render it again before the popover closes. Unopened ones next to an
+ * opened one are the evidence an external tool (a language learner's word tracker) needs.
+ */
+function openedAbbreviation(
+  container: HTMLElement,
+  trigger: Element,
+  text: string,
+  levels: ReportedLevels,
+) {
+  const { triggers, place } = describeAnnotations(container);
+  const position = triggers.findIndex((entry) => entry.trigger === trigger);
+  const word = triggers[position]?.text;
+  if (word === undefined) return null;
+  return {
+    word,
+    view: ANNOTATION_VIEW,
+    context: annotationContext(text),
+    position,
+    ...levels,
+    ...place,
+  };
+}
+
+/** The levels a message with levels reports it was rendered at: words, and sentences when they differ. */
+type ReportedLevels = { readonly level?: number; readonly sentenceLevel?: number };
+
+interface OpenAbbreviation {
+  readonly trigger: Element;
+  readonly at: number;
+  kind: "peek" | "pin";
+  readonly opened: ReturnType<typeof openedAbbreviation>;
+}
+
+const annotationContext = (text: string) => `m${fnv1a32(text).toString(36)}`;
+
 function markdownHeadingRenderer(level: 1 | 2 | 3 | 4 | 5 | 6) {
   const Tag = `h${level}` as const;
   return function MarkdownHeading({
@@ -1200,6 +1272,32 @@ const CHAT_MARKDOWN_COMPONENTS = {
       <p {...props}>
         {renderSkillInlineMarkdownChildren(children, skills, threadRef, environmentId)}
       </p>
+    );
+  },
+  abbr: function MarkdownAbbreviation({ node, children, ...props }) {
+    const popover = use(MarkdownAbbreviationContext);
+    const expansion = node?.properties?.dataMarkdownTitle;
+    if (!popover || typeof expansion !== "string" || expansion.trim() === "") {
+      return <abbr {...props}>{children}</abbr>;
+    }
+    // Hover previews the expansion; a click or tap keeps it open, so it also works on touch.
+    return (
+      <PopoverTrigger
+        handle={popover}
+        payload={expansion}
+        openOnHover
+        delay={ABBREVIATION_HOVER_DELAY_MS}
+        nativeButton={false}
+        render={
+          <abbr
+            {...props}
+            data-markdown-abbreviation=""
+            className="cursor-help underline decoration-dotted decoration-muted-foreground/60 underline-offset-2"
+          />
+        }
+      >
+        {children}
+      </PopoverTrigger>
     );
   },
   blockquote: function MarkdownBlockquote({ node: _node, children, ...props }) {
@@ -1926,6 +2024,13 @@ const CHAT_MARKDOWN_COMPONENTS = {
 } satisfies MarkdownComponents;
 
 const markdownOptions = new WeakMap<MarkdownExtensions, Map<string, WordsHastOptions>>();
+const transformIds = new WeakMap<NonNullable<WordsHastOptions["transform"]>, number>();
+let nextTransformId = 0;
+const transformId = (transform: NonNullable<WordsHastOptions["transform"]>) => {
+  let id = transformIds.get(transform);
+  if (id === undefined) transformIds.set(transform, (id = nextTransformId++));
+  return id;
+};
 
 /** One options object per configuration, so equal messages share a renderer and its cache. */
 function wordsOptions(
@@ -1934,7 +2039,8 @@ function wordsOptions(
 ): WordsHastOptions {
   let byFlags = markdownOptions.get(extensions);
   if (!byFlags) markdownOptions.set(extensions, (byFlags = new Map()));
-  const key = `${+flags.math}${+flags.breaks}${+flags.escapeHtml}${+flags.insights}`;
+  const transform = flags.transform ? `:${transformId(flags.transform)}` : "";
+  const key = `${+flags.math}${+flags.breaks}${+flags.escapeHtml}${+flags.insights}${transform}`;
   let options = byFlags.get(key);
   if (!options) byFlags.set(key, (options = { ...flags, extensions }));
   return options;
@@ -2009,6 +2115,9 @@ function markdownIslandOptions(state: ChatMarkdownComponentState): MarkdownIslan
         case "details":
         case "table":
           return true;
+        // An abbreviation with an expansion is a trigger for the message's popover.
+        case "abbr":
+          return typeof node.properties.dataMarkdownTitle === "string";
         case "blockquote":
           return GITHUB_ALERT_PRESENTATIONS[String(node.properties.dataAlert ?? "")] !== undefined;
         case "div":
@@ -2123,13 +2232,134 @@ function ChatMarkdown({
   const bindMarkdownRef = (node: HTMLElement | null) => {
     markdownRef.current = node;
   };
-  const markdown = wordsOptions(extensions, {
+  const markdownFlags = {
     math: componentState.mathEnabled,
     breaks: lineBreaks,
     escapeHtml: !parseRawHtml,
     insights: renderInsights && text.includes("★ Insight"),
-  });
+  };
+  const markdown = wordsOptions(extensions, markdownFlags);
   const blocks = streamingBlocks ?? [text];
+  // Only the last block of a streaming reply is still being written; a tag still arriving at its end is cut, whether
+  // or not the reply has levels yet. A block with no tag in it renders the same either way, so it keeps the renderer
+  // it finishes with and is parsed once.
+  const isWriting = (index: number) =>
+    props.isStreaming === true && index === blocks.length - 1 && blocks[index]!.includes("<");
+  // Only messages with raw <abbr> markup mount the shared expansion popover.
+  const hasAbbreviations = parseRawHtml && /<abbr\b/i.test(text);
+  // A message that carries its Japanese at every level renders at the reader's current one.
+  const hasLevels = parseRawHtml && /\sdata-on=/i.test(text);
+  const [abbreviationPopover] = useState(() => PopoverCreateHandle<string>());
+  const reportAnnotations = useAtomCommand(reportAnnotationInteractions, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const openAbbreviation = useRef<OpenAbbreviation | null>(null);
+  // Markdown that belongs to an environment (chat messages name theirs through threadRef) reports to this client's own
+  // server when it has one: the desktop app's local server forwards to the collector, while the server hosting the chat
+  // may be a stock build without this RPC.
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const environmentId =
+    componentState.environmentId === null
+      ? null
+      : (primaryEnvironmentId ?? componentState.environmentId);
+  const annotated = hasAbbreviations || hasLevels;
+  // In English only, glosses render as plain English, so nothing in the message is Japanese to report on.
+  const englishOnly = useAtomValue(englishOnlyAtom(annotated ? environmentId : null));
+  const level = useAtomValue(chatLevelAtom(hasLevels ? environmentId : null));
+  const sentenceLevel = useAtomValue(sentenceLevelAtom(hasLevels ? environmentId : null));
+  const tinted = useAtomValue(japaneseTintAtom);
+  // Reports from a message with levels carry the ones it is rendered at, the sentence level when it differs.
+  const reportedLevel = hasLevels ? level : undefined;
+  const reportedSentenceLevel = hasLevels && sentenceLevel !== level ? sentenceLevel : undefined;
+  const reportedLevels: ReportedLevels = {
+    ...(reportedLevel === undefined ? {} : { level: reportedLevel }),
+    ...(reportedSentenceLevel === undefined ? {} : { sentenceLevel: reportedSentenceLevel }),
+  };
+  const glossed = hasAbbreviations && !englishOnly;
+  const blockMarkdown = (index: number) =>
+    parseRawHtml && ((annotated && englishOnly) || hasLevels || isWriting(index))
+      ? wordsOptions(extensions, {
+          ...markdownFlags,
+          transform: levelTransform({
+            level: englishOnly ? -3 : hasLevels ? level : 0,
+            sentenceLevel: englishOnly ? -3 : hasLevels ? sentenceLevel : 0,
+            englishOnly,
+            streaming: isWriting(index),
+          }),
+        })
+      : markdown;
+  // A message with levels reports only once its server's level is known, never at a guessed one.
+  const statusKnown = useAtomValue(annotationStatusKnownAtom(hasLevels ? environmentId : null));
+  const reporting = glossed && (!hasLevels || statusKnown);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the collector's chat level and English only for this message's server loaded
+  useEffect(() => {
+    if (annotated && environmentId) watchAnnotationStatus(environmentId);
+  }, [annotated, environmentId]);
+  // Clicks, selections, mouse paths and paragraph stays on screen in a finished message with annotations.
+  const reportReading = useEffectEvent((items: ReadonlyArray<AnnotationReading>) => {
+    if (environmentId) void reportAnnotations({ environmentId, input: { items: [...items] } });
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the rendered message's DOM with the shared reading listeners until it unmounts or changes
+  useEffect(() => {
+    const container = markdownRef.current;
+    if (!reporting || !environmentId || isStreaming || !container) return;
+    return registerReadingMessage({
+      container,
+      view: ANNOTATION_VIEW,
+      context: annotationContext(text),
+      ...(reportedLevel === undefined ? {} : { level: reportedLevel }),
+      ...(reportedSentenceLevel === undefined ? {} : { sentenceLevel: reportedSentenceLevel }),
+      report: (items) => reportReading(items),
+    });
+  }, [
+    reporting,
+    environmentId,
+    isStreaming,
+    markdownRef,
+    text,
+    reportedLevel,
+    reportedSentenceLevel,
+  ]);
+  const finishAbbreviation = () => {
+    const open = openAbbreviation.current;
+    openAbbreviation.current = null;
+    if (!open?.opened || !environmentId) return;
+    const item: AnnotationInteraction = {
+      ...open.opened,
+      kind: open.kind,
+      at: open.at,
+      dwellMs: Math.max(0, Date.now() - open.at),
+    };
+    void reportAnnotations({ environmentId, input: { items: [item] } });
+  };
+  // Hover is a peek and a click, tap or Enter pins the expansion; a focus-only open is not counted, since scripts
+  // and keyboard navigation move focus without the reader asking for the meaning.
+  const handleAbbreviationOpenChange = (
+    open: boolean,
+    reason: string,
+    trigger: Element | undefined,
+  ) => {
+    if (openAbbreviation.current && (!open || openAbbreviation.current.trigger !== trigger)) {
+      finishAbbreviation();
+    }
+    const kind = reason === "trigger-hover" ? "peek" : reason === "trigger-press" ? "pin" : null;
+    if (!open || !kind || !trigger) return;
+    if (openAbbreviation.current) {
+      if (kind === "pin") openAbbreviation.current.kind = "pin";
+      return;
+    }
+    const container = markdownRef.current;
+    openAbbreviation.current = {
+      trigger,
+      at: Date.now(),
+      kind,
+      opened:
+        reporting && container
+          ? openedAbbreviation(container, trigger, text, reportedLevels)
+          : null,
+    };
+  };
 
   return (
     <Root
@@ -2143,20 +2373,37 @@ function ChatMarkdown({
       data-streaming={
         componentState.isStreaming && (!remounted || text !== textAtMount) ? "" : undefined
       }
+      data-japanese-tint={hasLevels && tinted && !englishOnly ? "" : undefined}
       onCopy={handleCopy}
     >
       <ChatMarkdownRendererContext value={componentState}>
-        {blocks.map((source, index) => (
-          <MarkdownSource
-            // oxlint-disable-next-line react/no-array-index-key -- streamed blocks only change at the end
-            key={index}
-            text={source}
-            markdown={markdown}
-            // Every block before the last is finished, so its parse can be reused.
-            cache={!props.isStreaming || index < blocks.length - 1}
-          />
-        ))}
+        <MarkdownAbbreviationContext value={glossed ? abbreviationPopover : null}>
+          {blocks.map((source, index) => (
+            <MarkdownSource
+              // oxlint-disable-next-line react/no-array-index-key -- streamed blocks only change at the end
+              key={index}
+              text={source}
+              markdown={blockMarkdown(index)}
+              // Every block before the last is finished, so its parse can be reused.
+              cache={!props.isStreaming || index < blocks.length - 1}
+            />
+          ))}
+        </MarkdownAbbreviationContext>
       </ChatMarkdownRendererContext>
+      {glossed ? (
+        <Popover
+          handle={abbreviationPopover}
+          onOpenChange={(open, details) =>
+            handleAbbreviationOpenChange(open, details.reason, details.trigger)
+          }
+        >
+          {({ payload }) => (
+            <PopoverPopup tooltipStyle side="top" initialFocus={false}>
+              {payload}
+            </PopoverPopup>
+          )}
+        </Popover>
+      ) : null}
       {localMediaPreview ? (
         <ExpandedImageDialog preview={localMediaPreview} onClose={closeLocalMediaPreview} />
       ) : null}

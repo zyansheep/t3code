@@ -3,6 +3,7 @@ import type { Root } from "hast";
 import { defaultSchema, sanitize, type Schema } from "hast-util-sanitize";
 
 import { CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES } from "./codexArtifactTemplates.ts";
+import { PREDICTION } from "./japaneseTint.ts";
 import {
   isWindowsDrivePathHref,
   normalizeMarkdownLinkDestination,
@@ -120,7 +121,24 @@ export function rehypePreserveImageSourceMeta() {
   };
 }
 
+/** Carries an abbreviation's expansion past the sanitizer, which drops native `title` tooltips. */
+export function rehypePreserveAbbreviationTitles() {
+  return (tree: MarkdownImageHastNode) => {
+    const visit = (node: MarkdownImageHastNode) => {
+      const title = node.properties?.title;
+      if (node.type === "element" && node.tagName === "abbr" && typeof title === "string") {
+        node.properties = { ...node.properties, dataMarkdownTitle: title };
+      }
+      node.children?.forEach(visit);
+    };
+
+    visit(tree);
+  };
+}
+
 const IMAGE_SRC_PROTOCOLS = [...(defaultSchema.protocols?.src ?? []), "file", "t3-context"];
+// The lowest chat level (data-on) at which a glossed word or a sentence's Japanese twin (data-jw) shows.
+const LEVEL_THRESHOLD = /^(?:-2|-1|0|1|2|3)$/;
 
 // The sanitizer compares schemes case-sensitively, so lowercase accepted file link schemes first.
 function normalizeLocalFileHref(href: string): string {
@@ -153,6 +171,7 @@ export function rehypeNormalizeLocalFileLinks() {
 
 export const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "abbr"],
   attributes: {
     ...defaultSchema.attributes,
     "*": (defaultSchema.attributes?.["*"] ?? []).filter((attribute) => attribute !== "title"),
@@ -164,9 +183,24 @@ export const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     ],
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
     // Spaces typed at the start of a user's line (keepLeadingWhitespace).
-    span: [...(defaultSchema.attributes?.span ?? []), "dataLeadingWhitespace"],
+    span: [
+      ...(defaultSchema.attributes?.span ?? []),
+      "dataLeadingWhitespace",
+      ["dataJw", "ja", "en"],
+      ["dataOn", LEVEL_THRESHOLD],
+      ["dataP", PREDICTION],
+      ["dataUnclosed", "end", "block"],
+      ["dataApart", ""],
+    ],
     div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
     a: [...(defaultSchema.attributes?.a ?? []), "dataPullRequestAutolink"],
+    abbr: [
+      "dataMarkdownTitle",
+      "dataEn",
+      ["dataOn", LEVEL_THRESHOLD],
+      ["dataP", PREDICTION],
+      ["dataUnclosed", "end", "block"],
+    ],
     img: [
       ...(defaultSchema.attributes?.img ?? []),
       "dataDarkSrc",

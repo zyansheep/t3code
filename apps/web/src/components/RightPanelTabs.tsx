@@ -55,6 +55,7 @@ import {
   FileDiff,
   Files,
   Globe2,
+  Layers,
   MessagesSquare,
   Plus,
   TerminalSquare,
@@ -643,6 +644,9 @@ function surfaceTitle(
         surface,
         resolve(msg("Thread on {label}", { label: surface.label })),
       );
+    case "review":
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- the fork's own copy is English only
+      return "Review";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return resolve(msg("Browser"));
@@ -737,6 +741,8 @@ function SurfaceIcon({
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
     case "linked-thread":
       return <MessagesSquare className="size-3 shrink-0" />;
+    case "review":
+      return <Layers className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />

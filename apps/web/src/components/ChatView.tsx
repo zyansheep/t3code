@@ -2561,6 +2561,7 @@ export default function ChatView(props: ChatViewProps) {
     openFileSurfaceStable,
     toggleRightPanelMaximizedStable,
     toggleRightPanelStable,
+    toggleReviewPanelStable,
     toggleThreadPanelStable,
     shortcuts: rightPanelShortcuts,
   } = useRightPanelActions({
@@ -3513,6 +3514,10 @@ export default function ChatView(props: ChatViewProps) {
     />
   ) : null;
   const panelToggleControlProps = {
+    reviewEnvironmentId: activeThread.environmentId,
+    reviewOpen: rightPanelOpen && activeRightPanelSurface?.kind === "review",
+    reviewShortcutLabel: shortcutLabelForCommand(keybindings, "annotations.review"),
+    onToggleReview: toggleReviewPanelStable,
     terminalAvailable: activeProject !== null,
     terminalOpen: terminalUiState.terminalOpen,
     terminalShortcutLabel: shortcutLabelForCommand(keybindings, "terminal.toggle"),

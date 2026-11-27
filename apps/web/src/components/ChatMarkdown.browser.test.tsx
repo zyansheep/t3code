@@ -1,6 +1,6 @@
 import { MISSING_FILE_ACCESS_MESSAGE } from "@t3tools/client-runtime/state/assets";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { AsyncResult } from "effect/reactivity";
+import { type Atom, AsyncResult } from "effect/reactivity";
 import { type ReactElement } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { commands, page, userEvent } from "vite-plus/test/browser";
@@ -111,6 +111,61 @@ vi.mock(import("../state/entities"), async (original) => {
     }) as never,
   };
 });
+const { annotationReport } = vi.hoisted(() => ({
+  annotationReport: vi.fn(async (_report: unknown) => ({ _tag: "Success" })),
+}));
+vi.mock(import("../state/use-atom-command"), async (original) => {
+  const actual = await original();
+  const { reportAnnotationInteractions } = await import("../state/annotationInteractions");
+  return {
+    ...actual,
+    useAtomCommand: ((command: unknown, options: unknown) =>
+      command === reportAnnotationInteractions
+        ? annotationReport
+        : actual.useAtomCommand(command as never, options as never)) as never,
+  };
+});
+// English only and the level go through the collector, which answers with what was asked for (with no end, so no
+// timer).
+const { englishSet, collector } = vi.hoisted(() => ({
+  englishSet: vi.fn((request: { input: { on: boolean } }) => ({
+    on: request.input.on,
+    until: 0,
+    at: 0,
+  })),
+  collector: { level: 0 },
+}));
+vi.mock(import("../state/annotationInteractions"), async (original) => {
+  const Effect = await import("effect/Effect");
+  return {
+    ...(await original()),
+    setAnnotationEnglish: {
+      label: "test:english",
+      run: (_registry: unknown, request: { input: { on: boolean } }) =>
+        Effect.sync(() => englishSet(request)),
+    } as never,
+    adjustAnnotationIntensity: {
+      label: "test:step",
+      run: (_registry: unknown, request: { input: { step: 1 | -1 } }) =>
+        Effect.sync(() => {
+          collector.level += request.input.step;
+          return { level: collector.level, until: 0 };
+        }),
+    } as never,
+  };
+});
+vi.mock(import("../state/annotationStatus"), async (original) => ({
+  ...(await original()),
+  watchAnnotationStatus: () => {},
+}));
+// The client's own server, which forwards annotation reports, rather than the one hosting the chat.
+vi.mock(import("../state/primaryEnvironment"), async (original) => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    ...(await original()),
+    primaryEnvironmentIdAtom: Atom.make<string | null>(null) as never,
+  };
+});
 vi.mock(import("../remoteOpen"), async (original) => ({
   ...(await original()),
   useRemoteOpenResolution: () => ({ state: { mode: "local-exec" }, isResolved: true }) as never,
@@ -162,6 +217,23 @@ import {
   chatMarkdownClipboardPayload,
   serializeRenderedMarkdownFragment,
 } from "../markdown-clipboard";
+import { AppAtomRegistryProvider, appAtomRegistry } from "../rpc/atomRegistry";
+import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
+import {
+  annotationStatusAtom,
+  setJapaneseTint,
+  stepAnnotationLevel,
+} from "../state/annotationStatus";
+import { flush as flushReading, visibleReadingContexts } from "../lib/annotationReading";
+import { installChatRouteCommands } from "../shortcuts/chatRouteCommands";
+import { ThreadJapanesePanel } from "./chat/ThreadJapanesePanel";
+
+// Writable under the mock above.
+const setPrimaryEnvironment = (environmentId: EnvironmentId | null) =>
+  appAtomRegistry.set(
+    primaryEnvironmentIdAtom as unknown as Atom.Writable<EnvironmentId | null>,
+    environmentId,
+  );
 import { AudioPreview } from "./files/AudioPreview";
 
 it("keeps compact audio playback loaded across signed URL renewals", async () => {
@@ -191,6 +263,17 @@ function setup() {
   parsedSources.length = 0;
   settingsOverrides.mathRenderingEnabled = false;
   nativeFileDrag.enabled = false;
+  // Reports earlier tests left queued go out now, not into this test's.
+  flushReading();
+  annotationReport.mockClear();
+  englishSet.mockClear();
+  collector.level = 0;
+  // Levels stored for the next start.
+  localStorage.clear();
+  setPrimaryEnvironment(null);
+  for (const environmentId of [ENGLISH_ENVIRONMENT, ENGLISH_PRIMARY]) {
+    appAtomRegistry.set(annotationStatusAtom(environmentId), null);
+  }
   renderDiagram.mockReset();
   threadWorktrees.clear();
   workspaceSearch.mockReset().mockResolvedValue(AsyncResult.success({ entries: [] }));
@@ -1291,5 +1374,378 @@ describe("ChatMarkdown copy of line breaks", () => {
     selection.addRange(range);
 
     expect(chatMarkdownClipboardPayload(selection)?.text).toBe("first line\nsecond line");
+  });
+});
+
+describe("ChatMarkdown abbreviations", () => {
+  it("shows an abbreviation's expansion in a popover on click, not a native tooltip", async () => {
+    setup();
+    await using screen = await renderText(
+      'Set a <abbr title="Content Security Policy">CSP</abbr> header.',
+    );
+    const abbreviation = screen.container.querySelector("abbr")!;
+    expect(abbreviation.textContent).toBe("CSP");
+    expect(abbreviation.hasAttribute("title")).toBe(false);
+    expect(document.body.textContent).not.toContain("Content Security Policy");
+
+    await userEvent.click(abbreviation);
+    await expect.element(page.getByText("Content Security Policy")).toBeVisible();
+  });
+
+  it("reports a pinned abbreviation with every abbreviation of its message when it closes", async () => {
+    setup();
+    const environmentId = EnvironmentId.make("environment-abbr");
+    const localEnvironmentId = EnvironmentId.make("environment-local");
+    setPrimaryEnvironment(localEnvironmentId);
+    await using screen = await render(
+      <AppAtomRegistryProvider>
+        <ChatMarkdown
+          cwd="/tmp/project"
+          text={
+            'Set a <abbr title="Content Security Policy">CSP</abbr> and <abbr title="HTTP Strict Transport Security">HSTS</abbr> header.'
+          }
+          // Chat messages name their environment only through the thread.
+          threadRef={{ environmentId, threadId: ThreadId.make("thread-abbr") }}
+        />
+      </AppAtomRegistryProvider>,
+    );
+    const abbreviation = screen.container.querySelector("abbr")!;
+    await userEvent.click(abbreviation);
+    await expect.element(page.getByText("Content Security Policy")).toBeVisible();
+    await userEvent.click(abbreviation);
+
+    await vi.waitFor(() => expect(annotationReport).toHaveBeenCalledTimes(1));
+    const [report] = annotationReport.mock.calls[0] as unknown as [
+      { environmentId: string; input: { items: Array<Record<string, unknown>> } },
+    ];
+    expect(report.environmentId).toBe(localEnvironmentId);
+    expect(report.input.items).toHaveLength(1);
+    expect(report.input.items[0]).toMatchObject({
+      kind: "pin",
+      word: "CSP",
+      position: 0,
+      annotations: [
+        ["CSP", expect.any(Number), expect.any(Number)],
+        ["HSTS", expect.any(Number), expect.any(Number)],
+      ],
+    });
+    expect(JSON.stringify(report)).not.toContain("header");
+  });
+});
+
+const ENGLISH_ENVIRONMENT = EnvironmentId.make("environment-english");
+const ENGLISH_PRIMARY = EnvironmentId.make("environment-english-local");
+
+function setEnglishOnly(environmentId: EnvironmentId, on: boolean) {
+  appAtomRegistry.set(annotationStatusAtom(environmentId), {
+    intensity: { level: 0, until: 0 },
+    english: { on, until: 0, at: 0 },
+  });
+}
+
+function renderMessages(...texts: string[]) {
+  return render(
+    <AppAtomRegistryProvider>
+      {texts.map((text) => (
+        <ChatMarkdown
+          key={text}
+          cwd="/tmp/project"
+          text={text}
+          threadRef={{ environmentId: ENGLISH_ENVIRONMENT, threadId: ThreadId.make("thread-en") }}
+        />
+      ))}
+    </AppAtomRegistryProvider>,
+  );
+}
+
+const blockTexts = (container: HTMLElement) =>
+  [...container.querySelectorAll("p, li, pre")].map((block) => block.textContent?.trim());
+
+const MIXED =
+  'The <abbr title="もんだい · problem / issue">問題</abbr> is small. <abbr title="きょう · today">今日</abbr>は<abbr title="あめ · rain">雨</abbr>です<abbr title="It is raining today.">。</abbr> We stay in <abbr title="いま · now">今</abbr>.';
+
+describe("ChatMarkdown English only", () => {
+  it("shows meanings for glossed words and translations for glossed sentences, then Japanese again", async () => {
+    setup();
+    setEnglishOnly(ENGLISH_ENVIRONMENT, true);
+    await using screen = await renderMessages(
+      [
+        MIXED,
+        // Runs back to the previous sentence mark, and keeps translations apart.
+        '<abbr title="あめ · rain">雨</abbr>です<abbr title="It is rain.">。</abbr><abbr title="ほんとう · really">本当</abbr>に<abbr title="Really?">？</abbr>',
+        // Runs back to the start of a list item.
+        '- <abbr title="もう · already">もう</abbr>、<abbr title="おわり · end">終わり</abbr>です<abbr title="It is already over.">。</abbr>',
+        // Never runs back across code, and leaves code as written.
+        'Run `npm test` <abbr title="いま · now">今</abbr>, then `git push` <abbr title="もう · already">もう</abbr>した<abbr title="Already pushed.">！</abbr>',
+        '```html\n<abbr title="もんだい · problem">問題</abbr>\n```',
+        // Abbreviations that aren't Japanese stay.
+        'Set a <abbr title="Content Security Policy">CSP</abbr> header <abbr title="いま · now">今</abbr>.',
+      ].join("\n\n"),
+    );
+    await vi.waitFor(() =>
+      expect(blockTexts(screen.container)).toEqual([
+        "The problem is small. It is raining today. We stay in now.",
+        "It is rain. Really?",
+        "It is already over.",
+        "Run npm test now, then git push Already pushed.",
+        '<abbr title="もんだい · problem">問題</abbr>',
+        "Set a CSP header now.",
+      ]),
+    );
+    expect([...screen.container.querySelectorAll("abbr")].map((abbr) => abbr.textContent)).toEqual([
+      "CSP",
+    ]);
+    expect(screen.container.querySelector("code")?.textContent).toBe("npm test");
+
+    await act(() => setEnglishOnly(ENGLISH_ENVIRONMENT, false));
+    await vi.waitFor(() =>
+      expect(blockTexts(screen.container)[0]).toBe(
+        "The 問題 is small. 今日は雨です。 We stay in 今.",
+      ),
+    );
+    expect(screen.container.querySelectorAll("abbr[data-markdown-abbreviation]")).toHaveLength(17);
+  });
+
+  it("reports no reading and offers no gloss while it is on", async () => {
+    setup();
+    setEnglishOnly(ENGLISH_ENVIRONMENT, true);
+    await using screen = await renderMessages(MIXED);
+    const paragraph = screen.container.querySelector("p")!;
+    await vi.waitFor(() => expect(paragraph.querySelector("[data-english]")).not.toBeNull());
+    await userEvent.click(page.getByText("problem", { exact: false }));
+    paragraph.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+    flushReading();
+    expect(annotationReport).not.toHaveBeenCalled();
+
+    // The same click, once Japanese is back, is reported.
+    await act(() => setEnglishOnly(ENGLISH_ENVIRONMENT, false));
+    await vi.waitFor(() => expect(paragraph.querySelector("abbr")).not.toBeNull());
+    await vi.waitFor(() => expect(visibleReadingContexts()).toHaveLength(1));
+    paragraph.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+    flushReading();
+    expect(annotationReport).toHaveBeenCalled();
+    await userEvent.click(paragraph.querySelector("abbr")!);
+    await expect.element(page.getByText("もんだい · problem / issue")).toBeVisible();
+  });
+
+  it("toggles from the shortcut, sending the messages on screen when it turns on", async () => {
+    setup();
+    setPrimaryEnvironment(ENGLISH_PRIMARY);
+    using stack = new DisposableStack();
+    const state = {
+      matches: [
+        { routeId: "__root__", pathname: "/", params: {} },
+        { routeId: "/_chat", pathname: "/", params: {} },
+      ],
+    };
+    stack.defer(installChatRouteCommands({ state } as never));
+    await using screen = await renderMessages(MIXED, 'One <abbr title="いま · now">今</abbr>.');
+    await vi.waitFor(() => expect(visibleReadingContexts()).toHaveLength(2));
+    const onScreen = visibleReadingContexts();
+
+    const pressShortcut = () =>
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "E",
+          code: "KeyE",
+          altKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    pressShortcut();
+    await vi.waitFor(() =>
+      expect(englishSet).toHaveBeenCalledWith({
+        environmentId: ENGLISH_PRIMARY,
+        input: { on: true, contexts: onScreen },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(blockTexts(screen.container)).toEqual([
+        "The problem is small. It is raining today. We stay in now.",
+        "One now.",
+      ]),
+    );
+
+    pressShortcut();
+    await vi.waitFor(() =>
+      expect(englishSet).toHaveBeenLastCalledWith({
+        environmentId: ENGLISH_PRIMARY,
+        input: { on: false, contexts: [] },
+      }),
+    );
+    await vi.waitFor(() => expect(blockTexts(screen.container)[1]).toBe("One 今."));
+  });
+});
+
+// A swapped word from heavier (1) up, and a sentence whose Japanese twin shows from much heavier (2) up; its English
+// twin has a word of its own from normal (0) up.
+const LEVELED =
+  'The <abbr title="もんだい · problem" data-en="problem" data-on="1">問題</abbr> is small. ' +
+  '<span data-jw="ja" data-on="2"><abbr title="あめ · rain">雨</abbr>です<abbr title="It is rain.">。</abbr></span>' +
+  '<span data-jw="en" data-on="2">It is <abbr title="あめ · rain" data-en="rain" data-on="0">雨</abbr>.</span>';
+
+describe("ChatMarkdown levels", () => {
+  it("hides an abbr tag still arriving at the end of a streaming reply, before it has any levels", async () => {
+    setup();
+    await using screen = await renderText(
+      'Say x<y. The <abbr title="もんだい · problem" data-en="pro',
+      {
+        isStreaming: true,
+      },
+    );
+    expect(screen.container.textContent).toBe("Say x<y. The ");
+  });
+
+  it("renders a message at the reader's level, again from the panel's arrows, and reports what it shows at that level", async () => {
+    setup();
+    setEnglishOnly(ENGLISH_ENVIRONMENT, false);
+    await using screen = await render(
+      <AppAtomRegistryProvider>
+        <ThreadJapanesePanel environmentId={ENGLISH_ENVIRONMENT} />
+        <ChatMarkdown
+          cwd="/tmp/project"
+          text={LEVELED}
+          threadRef={{ environmentId: ENGLISH_ENVIRONMENT, threadId: ThreadId.make("thread-en") }}
+        />
+      </AppAtomRegistryProvider>,
+    );
+    const paragraph = screen.container.querySelector("p")!;
+    const reported = (kind: string) =>
+      annotationReport.mock.calls
+        .flatMap(
+          ([report]) => (report as { input: { items: Array<{ kind: string }> } }).input.items,
+        )
+        .filter((item) => item.kind === kind);
+    const glossed = (...words: string[]) =>
+      words.map((word) => [word, expect.any(Number), expect.any(Number)]);
+    const pin = async (word: Element, gloss: string) => {
+      await userEvent.click(word);
+      await expect.element(page.getByText(gloss)).toBeVisible();
+      await userEvent.click(word);
+      await vi.waitFor(() => expect(reported("pin")).toHaveLength(1));
+      const [opened] = reported("pin");
+      annotationReport.mockClear();
+      return opened;
+    };
+    expect(paragraph.textContent).toBe("The problem is small. It is 雨.");
+    expect(await pin(paragraph.querySelector("abbr")!, "あめ · rain")).toMatchObject({
+      word: "雨",
+      position: 0,
+      level: 0,
+      annotations: glossed("雨"),
+    });
+
+    const heavier = page.getByRole("button", { name: "Heavier" });
+    await userEvent.click(heavier);
+    await vi.waitFor(() => expect(paragraph.textContent).toBe("The 問題 is small. It is 雨."));
+    await userEvent.click(heavier);
+    await expect.element(page.getByText("much heavier")).toBeVisible();
+    await vi.waitFor(() => expect(paragraph.textContent).toBe("The 問題 is small. 雨です。"));
+    // The same paragraph, rendered again in place.
+    expect(screen.container.querySelector("p")).toBe(paragraph);
+    expect(await pin(paragraph.querySelector("abbr")!, "もんだい · problem")).toMatchObject({
+      word: "問題",
+      position: 0,
+      level: 2,
+      annotations: glossed("問題", "雨", "。"),
+    });
+    paragraph.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+    flushReading();
+    expect(reported("click")).toEqual([
+      expect.objectContaining({ level: 2, annotations: glossed("問題", "雨", "。") }),
+    ]);
+
+    // English only renders as no Japanese at all.
+    await act(() => setEnglishOnly(ENGLISH_ENVIRONMENT, true));
+    await vi.waitFor(() => expect(paragraph.textContent).toBe("The problem is small. It is rain."));
+    expect(paragraph.querySelector("abbr")).toBeNull();
+  });
+
+  it("reports only once its server's level is known, rendering until then at the level stored last", async () => {
+    setup();
+    // The level the collector answered at an earlier start, then a new start that hasn't read it yet.
+    setEnglishOnly(ENGLISH_ENVIRONMENT, false);
+    await stepAnnotationLevel(ENGLISH_ENVIRONMENT, 1);
+    appAtomRegistry.set(annotationStatusAtom(ENGLISH_ENVIRONMENT), null);
+    await using screen = await renderMessages(`${LEVELED} Again.`);
+    const paragraph = screen.container.querySelector("p")!;
+    expect(paragraph.textContent).toBe("The 問題 is small. It is 雨. Again.");
+    const pinned = async () => {
+      const word = paragraph.querySelector("abbr")!;
+      await userEvent.click(word);
+      await expect.element(page.getByText("もんだい · problem")).toBeVisible();
+      await userEvent.click(word);
+      await expect.element(page.getByText("もんだい · problem")).not.toBeInTheDocument();
+      flushReading();
+      return annotationReport.mock.calls.flatMap(
+        ([report]) => (report as { input: { items: Array<{ kind: string }> } }).input.items,
+      );
+    };
+    expect(await pinned()).toEqual([]);
+    expect(visibleReadingContexts()).toEqual([]);
+
+    await act(() =>
+      appAtomRegistry.set(annotationStatusAtom(ENGLISH_ENVIRONMENT), {
+        intensity: { level: 1, until: 0 },
+        english: { on: false, until: 0, at: 0 },
+      }),
+    );
+    await vi.waitFor(() => expect(visibleReadingContexts()).toHaveLength(1));
+    const items = await pinned();
+    expect(items.filter((item) => item.kind === "pin")).toEqual([
+      expect.objectContaining({ word: "問題", level: 1 }),
+    ]);
+    expect(items.filter((item) => item.kind === "shown")).toEqual([
+      expect.objectContaining({ level: 1 }),
+    ]);
+  });
+  it("renders twins at the sentence level, reports it beside the word level, and splits its showings by both", async () => {
+    setup();
+    const levels = (level: number, sentences: number) =>
+      appAtomRegistry.set(annotationStatusAtom(ENGLISH_ENVIRONMENT), {
+        intensity: { level, until: 0 },
+        english: { on: false, until: 0, at: 0 },
+        sentences: { level: sentences, until: 0 },
+      });
+    levels(0, 2);
+    await using screen = await renderMessages(
+      LEVELED.replace('data-on="1"', 'data-on="1" data-p="0.4"'),
+    );
+    const paragraph = screen.container.querySelector("p")!;
+    const items = (kind: string) => {
+      flushReading();
+      const found = annotationReport.mock.calls
+        .flatMap(
+          ([report]) => (report as { input: { items: Array<{ kind: string }> } }).input.items,
+        )
+        .filter((item) => item.kind === kind);
+      annotationReport.mockClear();
+      return found;
+    };
+    expect(paragraph.textContent).toBe("The problem is small. 雨です。");
+    await vi.waitFor(() => expect(visibleReadingContexts()).toHaveLength(1));
+    expect(items("shown")).toEqual([expect.objectContaining({ level: 0, sentenceLevel: 2 })]);
+
+    // A change of either dial is another showing, and equal dials report the word level alone.
+    await act(() => levels(2, 2));
+    await vi.waitFor(() => expect(paragraph.textContent).toBe("The 問題 is small. 雨です。"));
+    await vi.waitFor(() => expect(items("shown")).toEqual([expect.objectContaining({ level: 2 })]));
+    expect(items("shown")).toEqual([]);
+    await act(() => levels(2, -1));
+    await vi.waitFor(() => expect(paragraph.textContent).toBe("The 問題 is small. It is 雨."));
+    await vi.waitFor(() =>
+      expect(items("shown")).toEqual([expect.objectContaining({ level: 2, sentenceLevel: -1 })]),
+    );
+
+    // The word's tint shows while the tint is on in this browser.
+    const root = screen.container.querySelector(".chat-markdown")!;
+    expect(paragraph.querySelector("abbr")!.getAttribute("data-tint")).toBe("8");
+    expect(root.hasAttribute("data-japanese-tint")).toBe(true);
+    await act(() => setJapaneseTint(false));
+    expect(root.hasAttribute("data-japanese-tint")).toBe(false);
+    await act(() => setJapaneseTint(true));
+    expect(root.hasAttribute("data-japanese-tint")).toBe(true);
   });
 });

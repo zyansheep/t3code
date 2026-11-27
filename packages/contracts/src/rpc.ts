@@ -94,6 +94,19 @@ import {
 } from "./auth.ts";
 import { ClientActivityReportInput } from "./background.ts";
 import {
+  AnnotationEnglish,
+  AnnotationEnglishSetInput,
+  AnnotationIntensity,
+  AnnotationIntensityAdjustInput,
+  AnnotationIntensityError,
+  AnnotationInteractionsReportInput,
+  AnnotationReportError,
+  AnnotationReviewError,
+  AnnotationReviewNextInput,
+  AnnotationReviewNextResult,
+  AnnotationStatus,
+} from "./annotationInteractions.ts";
+import {
   FilesystemGetMetadataInput,
   FilesystemGetMetadataResult,
   FilesystemBrowseInput,
@@ -640,6 +653,11 @@ export const WS_METHODS = {
   serverPrepareTriage: "server.prepareTriage",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
+  serverReportAnnotationInteractions: "server.reportAnnotationInteractions",
+  serverAdjustAnnotationIntensity: "server.adjustAnnotationIntensity",
+  serverNextAnnotationReview: "server.nextAnnotationReview",
+  serverGetAnnotationStatus: "server.getAnnotationStatus",
+  serverSetAnnotationEnglish: "server.setAnnotationEnglish",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
@@ -1225,6 +1243,38 @@ const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRelayClient
 const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientActivity, {
   payload: ClientActivityReportInput,
   error: EnvironmentAuthorizationError,
+});
+
+const WsServerReportAnnotationInteractionsRpc = Rpc.make(
+  WS_METHODS.serverReportAnnotationInteractions,
+  {
+    payload: AnnotationInteractionsReportInput,
+    error: Schema.Union([AnnotationReportError, EnvironmentAuthorizationError]),
+  },
+);
+
+const WsServerAdjustAnnotationIntensityRpc = Rpc.make(WS_METHODS.serverAdjustAnnotationIntensity, {
+  payload: AnnotationIntensityAdjustInput,
+  success: AnnotationIntensity,
+  error: Schema.Union([AnnotationIntensityError, EnvironmentAuthorizationError]),
+});
+
+const WsServerNextAnnotationReviewRpc = Rpc.make(WS_METHODS.serverNextAnnotationReview, {
+  payload: AnnotationReviewNextInput,
+  success: AnnotationReviewNextResult,
+  error: Schema.Union([AnnotationReviewError, EnvironmentAuthorizationError]),
+});
+
+const WsServerGetAnnotationStatusRpc = Rpc.make(WS_METHODS.serverGetAnnotationStatus, {
+  payload: Schema.Struct({}),
+  success: AnnotationStatus,
+  error: Schema.Union([AnnotationIntensityError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSetAnnotationEnglishRpc = Rpc.make(WS_METHODS.serverSetAnnotationEnglish, {
+  payload: AnnotationEnglishSetInput,
+  success: AnnotationEnglish,
+  error: Schema.Union([AnnotationIntensityError, EnvironmentAuthorizationError]),
 });
 
 const PullRequestRpcError = Schema.Union([
@@ -2600,6 +2650,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,
+  WsServerReportAnnotationInteractionsRpc,
+  WsServerAdjustAnnotationIntensityRpc,
+  WsServerNextAnnotationReviewRpc,
+  WsServerGetAnnotationStatusRpc,
+  WsServerSetAnnotationEnglishRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,

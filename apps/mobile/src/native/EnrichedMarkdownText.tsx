@@ -13,6 +13,16 @@ import {
   markdownWithTextDirection,
 } from "../lib/markdownDocument";
 import { useGT } from "gt-react-native";
+import {
+  GLOSS_LINK_PATTERN,
+  glossOf,
+  glossWord,
+  hasGlossLinks,
+  isGlossHref,
+  markdownWithGlosses,
+} from "../lib/markdownGlosses";
+import { markdownAtLevel, markdownEnglishOnly, withoutPartialTag } from "../lib/markdownLevels";
+import { tintLinkVariants } from "../lib/markdownTint";
 import { isValidElement, useMemo, useState, type ReactElement, type ReactNode } from "react";
 import { Platform, Share, StyleSheet, useWindowDimensions, View } from "react-native";
 import {
@@ -232,10 +242,13 @@ function codeBlockElement(
   return undefined;
 }
 
+const NO_GLOSSES: ReadonlySet<number> = new Set();
+
 export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   const { renderImage, resolveImageSource, fileEmbedLabel } = props;
   const gt = useGT();
-  const { themeAppearance, mathRenderingEnabled } = useAppearancePreferences();
+  const { themeAppearance, mathRenderingEnabled, chatJapaneseTintEnabled } =
+    useAppearancePreferences();
   // The library fills in {n}, {content} and {speech} itself when VoiceOver or TalkBack speaks.
   const accessibilityLabels = useMemo<AccessibilityLabels>(
     () => ({
@@ -269,28 +282,78 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     }),
     [gt],
   );
+  const { englishOnly, japaneseLevel, japaneseSentenceLevel, streaming } = props;
+  // Only leveled Japanese has a tint, never in English only; on the phone only its glossed words (lib/markdownTint.ts).
+  const tinted = chatJapaneseTintEnabled === true && japaneseLevel !== undefined && !englishOnly;
   const { markdown, fileHrefs } = useMemo(() => {
+    // The level picks from the message as written, whose attributes markdownWithHtml drops.
+    // A tag half arrived at the end of a streaming message is hidden, level markup or none.
+    const source =
+      japaneseLevel === undefined
+        ? streaming
+          ? withoutPartialTag(props.markdown)
+          : props.markdown
+        : markdownAtLevel(props.markdown, japaneseLevel, streaming, {
+            sentenceLevel: japaneseSentenceLevel,
+          });
+    const shown = englishOnly ? markdownEnglishOnly : (content: string) => content;
     if (!fileEmbedLabel) {
       return {
         markdown: markdownWithTextDirection(
-          markdownForNativeRendering(props.markdown, ENRICHED_INLINE_FILE_LINK_REGEX),
+          shown(markdownForNativeRendering(source, ENRICHED_INLINE_FILE_LINK_REGEX)),
         ),
         fileHrefs: new Set<string>(),
       };
     }
     const content = markdownWithInlineFileLinks(
-      markdownForNativeParsing(props.markdown),
+      markdownForNativeParsing(source),
       ENRICHED_INLINE_FILE_LINK_REGEX,
     );
     const files = markdownWithFileEmbeds(content, fileEmbedLabel);
     return {
       ...files,
-      markdown: markdownWithTextDirection(markdownWithTableBreaks(files.markdown)),
+      markdown: markdownWithTextDirection(shown(markdownWithTableBreaks(files.markdown))),
     };
-  }, [props.markdown, fileEmbedLabel]);
+  }, [
+    props.markdown,
+    fileEmbedLabel,
+    englishOnly,
+    japaneseLevel,
+    japaneseSentenceLevel,
+    streaming,
+  ]);
+  // Glossed words a tap has opened, by occurrence: each shows its gloss until tapped again. Occurrences are numbered
+  // anew at another level or English only, so those start with none open; streaming in keeps them.
+  const glossView = `${japaneseLevel ?? ""}/${japaneseSentenceLevel ?? ""}/${englishOnly ? "en" : ""}`;
+  const [openedGlosses, setOpenedGlosses] = useState<{
+    readonly view: string;
+    readonly open: ReadonlySet<number>;
+  }>(() => ({ view: glossView, open: new Set() }));
+  const openGlosses = openedGlosses.view === glossView ? openedGlosses.open : NO_GLOSSES;
+  const glossed = hasGlossLinks(markdown);
+  const rendered = useMemo(
+    () => markdownWithGlosses(markdown, openGlosses),
+    [markdown, openGlosses],
+  );
+  const { onGlossOpen } = props;
+  const toggleGloss = (url: string) => {
+    const gloss = glossOf(url);
+    if (!gloss) return;
+    // Decided here, not in the updater: an updater may run twice, and a tap is one report.
+    const opening = !openGlosses.has(gloss.index);
+    setOpenedGlosses((previous) => {
+      const next = new Set(previous.view === glossView ? previous.open : NO_GLOSSES);
+      if (!next.delete(gloss.index)) next.add(gloss.index);
+      return { view: glossView, open: next };
+    });
+    if (!opening || !onGlossOpen) return;
+    const word = glossWord(markdown, gloss.index);
+    if (word) onGlossOpen(word, japaneseLevel, japaneseSentenceLevel ?? japaneseLevel);
+  };
   const [parsedLinkUrls, setParsedLinkUrls] = useState<ReadonlyArray<string>>([]);
   const onLinksChange = (links: MarkdownLinkOccurrence[]) => {
-    const urls = [...new Set(links.map((link) => link.url))];
+    // Glosses take no pill, icon or link menu.
+    const urls = [...new Set(links.map((link) => link.url).filter((url) => !isGlossHref(url)))];
     setParsedLinkUrls((previous) =>
       previous.length === urls.length && previous.every((url, index) => url === urls[index])
         ? previous
@@ -321,6 +384,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   } | null>(null);
   const { fileContextMenu, onFileContextMenuAction } = props;
   const onLinkPress = (url: string) => {
+    if (isGlossHref(url)) return toggleGloss(url);
     const model = enrichedModelReference(url, props.models);
     if (model) {
       Dialog.alert(model.label, enrichedModelDetails(model));
@@ -408,8 +472,17 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
   // Link variants change as a message streams. The code renderer reads only the base style, so
   // it stays the same function and the library keeps its rendered blocks.
   const markdownStyle = useMemo(
-    () => ({ ...baseMarkdownStyle, linkVariants }),
-    [baseMarkdownStyle, linkVariants],
+    () => ({
+      ...baseMarkdownStyle,
+      linkVariants: {
+        ...linkVariants,
+        [GLOSS_LINK_PATTERN]: { color: props.textStyle.color, underline: true },
+        ...(tinted
+          ? tintLinkVariants({ dark: themeAppearance === "dark", textColor: props.textStyle.color })
+          : {}),
+      },
+    }),
+    [baseMarkdownStyle, linkVariants, props.textStyle.color, tinted, themeAppearance],
   );
   const renderers = {
     image: renderImage
@@ -438,6 +511,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     const onLinkLongPress =
       Platform.OS === "android" && props.fileContextMenu
         ? ({ url }: { url: string }) => {
+            if (isGlossHref(url)) return toggleGloss(url);
             const menu = modelContextMenu(url) ??
               props.fileContextMenu?.(url) ?? {
                 title: url,
@@ -461,7 +535,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
         }}
       >
         <EnrichedMarkdownText
-          markdown={markdown}
+          markdown={rendered}
           markdownStyle={markdownStyle}
           writingDirection={props.writingDirection}
           onLinksChange={onLinksChange}
@@ -502,7 +576,9 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
           enableCodeBlockWrapToggle
           spoilerOverlay="solid"
           onLinkPress={
-            props.onLinkPress || props.onImagePress ? ({ url }) => onLinkPress(url) : undefined
+            props.onLinkPress || props.onImagePress || glossed
+              ? ({ url }) => onLinkPress(url)
+              : undefined
           }
           onLinkLongPress={onLinkLongPress}
           linkContextMenuItems={linkContextMenuItems}

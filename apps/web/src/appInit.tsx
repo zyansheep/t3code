@@ -60,6 +60,7 @@ import { environmentProjects } from "./state/projects";
 import { primaryRelayTracingAllowedAtom, primaryServerConfigAtom } from "./state/server";
 import { environmentShell } from "./state/shell";
 import { installChatRouteCommands } from "./shortcuts/chatRouteCommands";
+import { startAnnotationStatusRefresh } from "./state/annotationStatus";
 import { startWorkspaceFocus } from "./lib/workspaceFocus";
 import { m } from "./i18n/messages";
 import { startI18n, subscribeI18n } from "./i18n/runtime";
@@ -291,6 +292,7 @@ export function startAppServices(): AppRouter {
   startPreviewTitleRecording();
   startBrowserProfileReporting();
   installChatRouteCommands(router);
+  startAnnotationStatusRefresh();
   installCommandPaletteCommands(router);
   registerOpenFavoriteEditorCommand();
   startThreadOverlayRetention(router);
