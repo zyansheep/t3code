@@ -1,0 +1,462 @@
+name: Z3 Code
+
+# Z3 Code, the fork, released for every device at once: the Linux x64 AppImage, the linux-x64 `t3`
+# CLI and the Android APK, built from the same source and published as one release, so the desktop
+# app, the servers and the phone all speak the same protocol. Builds follow upstream's nightly
+# releases (vX.Y.Z-nightly.YYYYMMDD.B), so the phone's newer screens build on the same base as
+# the desktop.
+#
+# Each run replays the commits on z3 onto the newest upstream nightly tag, runs check:changed
+# against that tag (format, lint, knip, typecheck of the affected packages, and the tests beside
+# our changes), builds the three assets, and publishes them as <nightly>-z3.N: N counts our
+# releases on that nightly. The tag points at the z3 commit that was replayed. The desktop app
+# still reads such a version as Beta (its nightly pattern ends at the build number), so its name
+# and data directory stay those of the stable-based releases.
+#
+# CI never pushes z3: GITHUB_TOKEN may not push commits that touch workflow files, and z3 stays
+# whatever was last pushed by hand. When z3 no longer applies to the newest nightly, the run
+# builds on the nightly of our newest release instead and warns, so what is pushed to z3 still
+# ships and only upstream's newer changes wait. (Not an older nightly: that would lower the APK's
+# versionCode, and Android refuses the update.) To catch up, rebase by hand, then push, which
+# starts a run:
+#   git fetch upstream --tags && git rebase <nightly tag> z3   # resolve, vp run check:changed <tag>
+#   git push --force-with-lease origin z3
+#
+# The APK installs beside the official app under its own id, signed with the fork's key; it has
+# no T3 cloud sign-in or push notifications, which need upstream's keys. The desktop build has no
+# update feed: installs update through their package manager (Nix) or this release page.
+on:
+  schedule:
+    - cron: "41 * * * *"
+  push:
+    branches:
+      - z3
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Release again even when this upstream nightly and z3 commit are released
+        type: boolean
+        default: false
+
+concurrency:
+  group: z3-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM: https://github.com/pingdotgg/t3code.git
+  KEEP_RELEASES: "10"
+
+jobs:
+  prepare:
+    name: Replay z3 onto upstream nightly
+    if: github.repository == 'zyansheep/t3code'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      base: ${{ steps.replay.outputs.base }}
+      newest: ${{ steps.release.outputs.newest }}
+      source: ${{ steps.release.outputs.source }}
+      version: ${{ steps.replay.outputs.version }}
+      tag: ${{ steps.replay.outputs.tag }}
+      code: ${{ steps.replay.outputs.code }}
+      built: ${{ steps.replay.outputs.built }}
+      skip: ${{ steps.release.outputs.skip == 'true' || steps.replay.outputs.skip == 'true' }}
+    steps:
+      - name: Resolve the release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          newest=$(gh release list -R pingdotgg/t3code --limit 40 --json tagName \
+            -q '[.[] | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-nightly\\.[0-9]{8}\\.[0-9]+$"))][0].tagName')
+          [[ "$newest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]] || {
+            echo "::error::no upstream nightly release found (got '$newest')"
+            exit 1
+          }
+          if [ "$GITHUB_REF" = refs/heads/z3 ]; then
+            source=$GITHUB_SHA
+          else
+            source=$(gh api "repos/$GITHUB_REPOSITORY/commits/z3" -q .sha)
+          fi
+          # Our releases, one "<commit>\t<tag>" a line, which the replay numbers this one from.
+          git ls-remote --tags "https://github.com/$GITHUB_REPOSITORY.git" 'refs/tags/v*-z3.*' \
+            | sed -nE 's|^([0-9a-f]+)\trefs/tags/(.+-z3\.[0-9]+)$|\1\t\2|p' > "$RUNNER_TEMP/released"
+          out=$(awk -F'\t' -v s="$source" -v p="$newest-z3." '$1 == s && index($2, p) == 1 { print $2 }' "$RUNNER_TEMP/released")
+          if [ "$FORCE" != true ] && [ -n "$out" ]; then
+            echo "z3 $source is out on $newest already: $out"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The nightly of our newest release, which the replay falls back to.
+          last=$(sed -nE 's/^[0-9a-f]+\t(v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.([0-9]+))-z3\.[0-9]+$/\2 \1/p' \
+            "$RUNNER_TEMP/released" | sort -n | tail -1 | cut -d' ' -f2)
+          {
+            echo "newest=$newest"
+            echo "last=$last"
+            echo "source=$source"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout z3
+        if: steps.release.outputs.skip != 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.release.outputs.source }}
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Replay our commits onto the nightly tag
+        id: replay
+        if: steps.release.outputs.skip != 'true'
+        env:
+          NEWEST: ${{ steps.release.outputs.newest }}
+          LAST: ${{ steps.release.outputs.last }}
+          SOURCE: ${{ steps.release.outputs.source }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          # Replays z3 onto the tag $1. On a conflict it lists the files and leaves z3 as it was.
+          replay() {
+            git fetch -q --no-tags --filter=blob:none "$UPSTREAM" "+refs/tags/$1:refs/tags/$1" || {
+              echo "::error::could not fetch $1 from upstream"
+              exit 1
+            }
+            # --committer-date-is-author-date rewrites even an up-to-date branch, so only replay when needed.
+            if git merge-base --is-ancestor "$1" HEAD; then
+              echo "z3 is on $1 already."
+              return 0
+            fi
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              rebase --committer-date-is-author-date "$1" && return 0
+            git status --short | head -40
+            git rebase --abort
+            return 1
+          }
+          base=$NEWEST
+          if ! replay "$base"; then
+            if [ -z "$LAST" ] || [ "$LAST" = "$NEWEST" ]; then
+              echo "::error::z3 no longer applies to $NEWEST. Rebase it by hand: git rebase $NEWEST z3, resolve, then push."
+              exit 1
+            fi
+            base=$LAST
+            echo "::warning::z3 no longer applies to $NEWEST, so this builds on $base, the nightly of our newest release. To catch up, rebase it by hand: git rebase $NEWEST z3, resolve, then push."
+            replay "$base" || {
+              echo "::error::z3 applies to neither $NEWEST nor $base. Rebase it by hand: git rebase $NEWEST z3, resolve, then push."
+              exit 1
+            }
+          fi
+          out=$(awk -F'\t' -v s="$SOURCE" -v p="$base-z3." '$1 == s && index($2, p) == 1 { print $2 }' "$RUNNER_TEMP/released")
+          if [ "$FORCE" != true ] && [ -n "$out" ]; then
+            echo "z3 $SOURCE is out on $base already: $out"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$base" =~ -nightly\.[0-9]{8}\.([0-9]+)$ ]]
+          build=${BASH_REMATCH[1]}
+          last=$(awk -F'\t' -v p="$base-z3." 'index($2, p) == 1 { print substr($2, length(p) + 1) }' "$RUNNER_TEMP/released" \
+            | sort -n | tail -1)
+          n=$(( ${last:-0} + 1 ))
+          (( n < 1000 )) || { echo "::error::$base has 999 releases; versionCode has no room"; exit 1; }
+          # Android only installs a higher versionCode: upstream's nightly build number, then N. Above
+          # every stable-based release's ((major * 100 + minor) * 100 + patch) * 1000 + N, and under
+          # Android's cap of 2100000000 until build 2100000.
+          code=$(( build * 1000 + n ))
+          (( code > 107002 && code < 2100000000 )) || { echo "::error::versionCode $code is out of range"; exit 1; }
+          echo "Releasing z3 $SOURCE on $base as $base-z3.$n (versionCode $code)"
+          echo "Ours, on $base:"
+          git log --format='%h %an: %s' "$base..HEAD"
+          if git log --format=%an "$base..HEAD" | grep -vqx zyansheep; then
+            echo "::error::z3 carries commits by someone other than zyansheep on top of $base"
+            exit 1
+          fi
+          git branch -f z3-built HEAD
+          git bundle create "$RUNNER_TEMP/z3.bundle" z3-built "^$base"
+          {
+            echo "base=$base"
+            echo "version=${base#v}-z3.$n"
+            echo "tag=$base-z3.$n"
+            echo "code=$code"
+            echo "built=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the replayed commits
+        if: steps.release.outputs.skip != 'true' && steps.replay.outputs.skip != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: z3-source
+          path: ${{ runner.temp }}/z3.bundle
+          if-no-files-found: error
+          retention-days: 3
+
+  test:
+    name: Check our changes
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-24.04 # Playwright has no browser build for ubuntu-latest (26.04) yet
+    timeout-minutes: 45
+    env:
+      BASE: ${{ needs.prepare.outputs.base }}
+    steps:
+      - &download-source
+        name: Download the replayed commits
+        uses: actions/download-artifact@v8
+        with:
+          name: z3-source
+          path: ${{ runner.temp }}/z3-source
+
+      - &checkout-source
+        name: Checkout the replayed source
+        env:
+          BUILT: ${{ needs.prepare.outputs.built }}
+        run: |
+          git init -q .
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git fetch -q --no-tags --depth=1 "$UPSTREAM" "+refs/tags/$BASE:refs/tags/$BASE"
+          git fetch -q "$RUNNER_TEMP/z3-source/z3.bundle" "+refs/heads/z3-built:refs/heads/z3-built"
+          git -c advice.detachedHead=false checkout -q "$BUILT"
+          git log --oneline "$BASE..HEAD"
+
+      - name: Setup Vite+
+        uses: ./.github/actions/setup-ci-deps
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Install Chromium for browser tests
+        run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
+
+      - name: Check our changes against the nightly tag
+        run: vp run check:changed "$BASE"
+
+  desktop:
+    name: Build the AppImage and the t3 CLI
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    # Upstream's packager refuses native modules needing a glibc newer than
+    # Ubuntu 24.04's (scripts/linux-glibc.ts), so it builds where upstream does.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      BASE: ${{ needs.prepare.outputs.base }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RUST_TARGET: x86_64-unknown-linux-gnu
+      # Builds outside pingdotgg/t3code report "dev" telemetry, as upstream's own forks do.
+      T3CODE_TELEMETRY_CHANNEL: dev
+    steps:
+      - *download-source
+      - *checkout-source
+
+      - name: Setup Vite+
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/web... --filter=@t3tools/scripts...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.RUST_TARGET }}
+
+      - name: Install Linux build libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev pkg-config imagemagick patchelf xvfb
+
+      - name: Align package versions to the release
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      # The steps below follow release.yml's build_bundle and release-desktop.yml's Linux x64 job.
+      - name: Build the JS bundle
+        run: vp run build:desktop
+
+      - name: Apply web client branding
+        run: node scripts/apply-web-brand-assets.ts production apps/server/dist/client
+
+      - name: Build resource monitor
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target "$RUST_TARGET"
+
+      - name: Build CLI single-executable
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+
+      - name: Build CLI archive
+        run: |
+          monitor="$RUNNER_TEMP/cli-resource-monitor/linux-x64"
+          mkdir -p "$monitor"
+          cp "native/resource-monitor/target/$RUST_TARGET/release/t3-resource-monitor" "$monitor/"
+          node scripts/build-cli-archive.ts --platform linux --arch x64 --version "$VERSION" \
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" --output-dir release-cli
+
+      - name: Smoke-test CLI archive
+        run: node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "$VERSION"
+
+      # GITHUB_REPOSITORY would give the app an update feed; like the local vendored builds it has none.
+      - name: Build the AppImage
+        env:
+          T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true"
+        run: |
+          env -u GITHUB_REPOSITORY vp run dist:desktop:artifact --platform linux --target AppImage --arch x64 \
+            --build-version "$VERSION" --skip-build --verbose
+
+      - name: Launch check
+        run: |
+          appimage=$(ls release/*.AppImage)
+          chmod +x "$appimage"
+          (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null)
+          xvfb-run -a node scripts/smoke-desktop-app.ts --artifacts-dir "$RUNNER_TEMP/desktop-launch-check" \
+            --executable "$RUNNER_TEMP/squashfs-root/t3code"
+
+      - name: Upload launch check output
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-launch-check
+          path: ${{ runner.temp }}/desktop-launch-check
+          if-no-files-found: ignore
+
+      - name: Collect assets
+        run: |
+          mkdir -p z3-assets
+          cp release/*.AppImage "z3-assets/Z3-Code-$VERSION-x86_64.AppImage"
+          cp release-cli/t3-*-linux-x64.tar.gz z3-assets/
+
+      - name: Upload assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: z3-desktop
+          path: z3-assets/*
+          if-no-files-found: error
+          retention-days: 3
+
+  android:
+    name: Build the APK
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      BASE: ${{ needs.prepare.outputs.base }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      APP_VARIANT: production
+      EXPO_NO_GIT_STATUS: "1"
+      T3CODE_ANDROID_PACKAGE: com.zyansheep.t3code
+      T3CODE_APP_NAME: Z3 Code
+      T3CODE_MOBILE_UPDATES_ENABLED: "0"
+      T3CODE_MOBILE_VERSION: ${{ needs.prepare.outputs.version }}
+      T3CODE_ANDROID_VERSION_CODE: ${{ needs.prepare.outputs.code }}
+    steps:
+      - *download-source
+      - *checkout-source
+
+      - name: Setup Vite+
+        uses: ./.github/actions/setup-ci-deps
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Generate the Android project
+        working-directory: apps/mobile
+        run: vp exec expo prebuild --clean --platform android --no-install
+
+      - name: Build the APK
+        working-directory: apps/mobile/android
+        env:
+          NODE_ENV: production
+        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a
+
+      - name: Sign the APK
+        env:
+          KEYSTORE: ${{ secrets.Z3_ANDROID_KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.Z3_ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          printf %s "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+          KS_PASS=$(printf %s "$KEYSTORE_PASSWORD" | tr -d '\r\n')
+          export KS_PASS
+          build_tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          mkdir -p z3-assets
+          out="z3-assets/z3code-$VERSION.apk"
+          "$build_tools/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias jw --ks-pass env:KS_PASS \
+            --key-pass env:KS_PASS --out "$out" apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          rm -f "$RUNNER_TEMP/release.jks"
+          "$build_tools/apksigner" verify --print-certs "$out" | grep -m1 'SHA-256'
+          "$build_tools/aapt2" dump badging "$out" | head -1
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: z3-android
+          path: z3-assets/*.apk
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Publish the release
+    needs: [prepare, test, desktop, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE: ${{ needs.prepare.outputs.base }}
+      NEWEST: ${{ needs.prepare.outputs.newest }}
+      SOURCE: ${{ needs.prepare.outputs.source }}
+      BUILT: ${{ needs.prepare.outputs.built }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - *download-source
+      - *checkout-source
+
+      - name: Download the AppImage and CLI
+        uses: actions/download-artifact@v8
+        with:
+          name: z3-desktop
+          path: z3-assets
+
+      - name: Download the APK
+        uses: actions/download-artifact@v8
+        with:
+          name: z3-android
+          path: z3-assets
+
+      - name: Publish
+        run: |
+          cd z3-assets
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          {
+            echo "Upstream [$BASE](https://github.com/pingdotgg/t3code/releases/tag/$BASE) with z3 on top."
+            echo
+            if [ "$BASE" != "$NEWEST" ]; then
+              echo "z3 no longer applies to upstream's newest nightly, $NEWEST, so this stays on $BASE until z3 is rebased."
+              echo
+            fi
+            if [ "$SOURCE" = "$BUILT" ]; then
+              echo "Source: z3 $SOURCE, which is based on $BASE."
+            else
+              echo "Source: z3 $SOURCE, replayed onto $BASE in CI as $BUILT."
+            fi
+            echo
+            git log --format='- %s' "$BASE..$BUILT"
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" ./* -R "$GITHUB_REPOSITORY" --target "$SOURCE" \
+            --title "Z3 Code $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --latest
+
+      # Keep the newest few: each release carries an AppImage, a CLI and an APK, and devices only run the latest.
+      # Also prunes the nightly-based releases (vX.Y.Z-nightly.D.N-z3.<sha>) the Z3 Code APK workflow made.
+      - name: Prune old releases
+        run: |
+          gh release list -R "$GITHUB_REPOSITORY" --limit 100 --json tagName -q '.[].tagName' \
+            | grep -E -- '-z3\.([0-9]+|[0-9a-f]{7})$' | tail -n +"$((KEEP_RELEASES + 1))" \
+            | while read -r old; do gh release delete "$old" -R "$GITHUB_REPOSITORY" --cleanup-tag --yes; done
